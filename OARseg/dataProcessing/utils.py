@@ -31,7 +31,7 @@ else:
         im_resized = cv2.resize(im, (size[1], size[0]), interpolation=interp)  # swap sizes to account for weird OCV API
         #add last dimension again if it was removed by resize
         if im.ndim > im_resized.ndim:
-            im_resized = np.expand_dims(im_resized, im.ndim)
+            im_resized = np.expand_dims(im_resized, -1)
         return im_resized
 
     def resize_image_as_onehot(im, size, nlabels, interp=cv2.INTER_LINEAR):
@@ -63,7 +63,7 @@ else:
 
         remapped = cv2.remap(im, map_x, map_y, interpolation=interp, borderMode=cv2.BORDER_REFLECT) #borderValue=float(np.min(im)))
         if im.ndim > remapped.ndim:
-            remapped = np.expand_dims(remapped, im.ndim)
+            remapped = np.expand_dims(remapped, -1)
         return remapped
 
 

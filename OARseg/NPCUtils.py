@@ -414,6 +414,38 @@ def AllLoss(outputs, labels):
 
     return final_loss
 
+def AllLossReg(outputs, labels):
+    '''
+    :param outputs: the outputs of network
+    :param labels: the labels
+    :return: final_loss
+    '''
+
+    ## Segmentation loss
+    loss1 = SegLoss(outputs[1], labels[1])
+    loss2 = SegLoss(outputs[3], labels[1])
+
+    ## Mse loss
+    loss3 = MSELoss(outputs[0], labels[0])
+    loss4 = MSELoss(outputs[2], labels[0])
+
+    ## Distance loss
+    loss5 = NPCDistLoss(outputs[1], labels[1])
+
+    ## sum loss
+    # final_seg_loss = loss1
+    # final_mse_loss = loss3
+    final_seg_loss = (loss1 + loss2) / 2
+    final_mse_loss = (loss3 + loss4) / 2
+    final_dist_loss = loss5
+
+    return final_seg_loss, final_mse_loss, final_dist_loss
+
+def MSELoss(outputs, labels):
+    # mseloss = torch.nn.MSELoss()
+    mse = F.mse_loss(outputs, labels, reduction='mean')
+    return mse
+
 def SegLoss(outputs, labels):
     ## Loss for Segmentation task
     target_class = labels.shape[1]
@@ -539,7 +571,7 @@ def NPCDistLoss(outputs, labels):
     #bring outputs into correct shape
     wt = outputs.chunk(target_class, dim=1)
     wt = list(wt)
-    # wt = wt[0]
+
     wt_num = len(wt)
     s = wt[0].shape
     for wn in range(wt_num):
@@ -557,20 +589,14 @@ def NPCDistLoss(outputs, labels):
             wtMask_label.append(wn)
 
     wtMask_num = len(wtMask_label)
-    # print(wtMask_num)
 
     #calculate losses
-    # wtLoss = []
     wtLoss_dis = []
     for wn in wtMask_label:#range(wt_num):
-        # wtLoss_1 = diceLoss(wt[wn], wtMask[wn], nonSquared=nonSquared)# + crossentropy(wt[wn], wtMask[wn])
         wtLoss_dis_1 = LocationLoss(wt[wn], wtMask[wn])
-        # wtLoss.append(wtLoss_1)
         wtLoss_dis.append(wtLoss_dis_1)
 
-    # print('Dis Loss:', (np.sum(wtLoss_dis) / (wtMask_num + 1e-7)).item())
-
-    return np.sum(wtLoss_dis) / (wtMask_num + 1e-7), wtLoss_dis
+    return np.sum(wtLoss_dis) / (wtMask_num + 1e-7)
 
 def NPCMultiDiceLoss(outputs, labels, nonSquared=False, target_class = 1):
 

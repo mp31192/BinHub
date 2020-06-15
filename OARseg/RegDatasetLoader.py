@@ -10,14 +10,15 @@ import copy
 class OARDataset(torch.utils.data.Dataset):
     #mode must be trian, test or val
 
-    def __init__(self, filePath, expConfig, mask_num=None, mode="train", hasMasks=True, AutoChangeDim=True):
+    def __init__(self, filePath, expConfig, template_id, mask_num=None, mode="train", hasMasks=True, AutoChangeDim=True):
         super(OARDataset, self).__init__()
         self.filePath = filePath
         self.mode = mode
         self.hasMasks = hasMasks
         self.mask_num = mask_num
         self.auto_dim = AutoChangeDim
-        self.local_result_path = "/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/2019_MICCAI_challenge_NPC/predictbase/202006130942_MICCAI2015OAR_registration_alltemplate_globalmaxpooling_morechannels_train"
+        self.template_path = "/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/NPC_MICCAI_2015_original_data/HaN_2015_crop/train_all_headonly_template"
+        self.template_id = template_id
 
         #augmentation settings
         self.nnAugmentation = expConfig.NN_AUGMENTATION
@@ -40,14 +41,20 @@ class OARDataset(torch.utils.data.Dataset):
         ## get patient id
         patient_id = self.file[index]
         patient_id = patient_id.split('_')[0]
-        # print(patient_id)
+
         ## get data path
         image_path = os.path.join(self.filePath, self.file[index] + '_data.nii.gz')
-        local_result_path = os.path.join(self.filePath, self.file[index] + '_label.nii.gz')
+
+        ## get atlas path
+        atlas_image_path = os.path.join(self.template_path, self.template_id + '_0_data.nii.gz')
+        atlas_mask_path = os.path.join(self.template_path, self.template_id + '_0_template.nii.gz')
 
         ## read data
         image = utils.read_nii_image(image_path)
-        local_result = utils.read_nii_image(local_result_path)
+        atlas_image = utils.read_nii_image(atlas_image_path)
+        atlas_mask = utils.read_nii_image(atlas_mask_path)
+        atlas_mask[atlas_mask >= 0.3] = 1
+        atlas_mask[atlas_mask < 0.3] = 0
 
         ## check the dimension number
         img_shape = image.shape
@@ -75,16 +82,18 @@ class OARDataset(torch.utils.data.Dataset):
             dim_num = int(len(img_shape) - 1)
             image.swapaxes(min_dim, dim_num)
             image = image.astype('float32')
-            local_result.swapaxes(min_dim, dim_num)
-            local_result = local_result.astype('float32')
+            atlas_image.swapaxes(min_dim, dim_num)
+            atlas_image = atlas_image.astype('float32')
             if self.hasMasks:
                 labels.swapaxes(min_dim, dim_num)
                 labels = labels.astype('float32')
         else:
             image = np.transpose(image, [1, 2, 0])
             image = image.astype('float32')
-            local_result = np.transpose(local_result, [1, 2, 0])
-            local_result = local_result.astype('float32')
+            atlas_image = np.transpose(atlas_image, [1, 2, 0])
+            atlas_image = atlas_image.astype('float32')
+            atlas_mask = np.transpose(atlas_mask, [1, 2, 0, 3])
+            atlas_mask = atlas_mask.astype('float32')
             if self.hasMasks:
                 labels = np.transpose(labels, [1, 2, 0])
                 labels = labels.astype('float32')
@@ -94,11 +103,16 @@ class OARDataset(torch.utils.data.Dataset):
         image[image < -900] = -900
         ## image normalization
         image = self.normalise_image(image, min_intensity=-900)
+        atlas_image[atlas_image < -900] = -900
+        atlas_image = self.normalise_image(atlas_image, min_intensity=-900)
 
-        local_result = self._toEvaluationOneHot(local_result, self.mask_num)
+        # atlas_mask = self._toEvaluationOneHot(atlas_mask, self.mask_num)
 
         ## add a channel axis
-        if len(img_shape) == image.ndim: image = np.expand_dims(image, -1)
+        if len(img_shape) == image.ndim:
+            image = np.expand_dims(image, -1)
+            atlas_image = np.expand_dims(atlas_image, -1)
+
 
         #Prepare data
         if self.hasMasks:
@@ -111,36 +125,40 @@ class OARDataset(torch.utils.data.Dataset):
 
         #augment data
         if self.mode == "train":
-            image, labels, local_result = aug.augment3DImageEdge(image,
-                                                                 labels,
-                                                                 local_result,
-                                                                 defaultLabelValues,
-                                                                 self.nnAugmentation,
-                                                                 self.doRotate,
-                                                                 self.rotDegrees,
-                                                                 self.doScale,
-                                                                 self.scaleFactor,
-                                                                 self.doFlip,
-                                                                 self.doElasticAug,
-                                                                 self.sigma,
-                                                                 self.doIntensityShift,
-                                                                 self.maxIntensityShift)
+            image, labels, atlas_image, atlas_mask = \
+                aug.augment3DImageTemp(image,
+                                       labels,
+                                       atlas_image,
+                                       atlas_mask,
+                                       defaultLabelValues,
+                                       self.nnAugmentation,
+                                       self.doRotate,
+                                       self.rotDegrees,
+                                       self.doScale,
+                                       self.scaleFactor,
+                                       self.doFlip,
+                                       self.doElasticAug,
+                                       self.sigma,
+                                       self.doIntensityShift,
+                                       self.maxIntensityShift)
 
         image = np.transpose(image, (3, 0, 1, 2))  # bring into NCWH format
-        local_result = np.transpose(local_result, (3, 0, 1, 2))
+        atlas_image = np.transpose(atlas_image, (3, 0, 1, 2))
+        atlas_mask = np.transpose(atlas_mask, (3, 0, 1, 2))
         if self.hasMasks: labels = np.transpose(labels, (3, 0, 1, 2))  # bring into NCWH format
 
         ## to tensor
         image = torch.from_numpy(image)
-        local_result = torch.from_numpy(local_result)
+        atlas_image = torch.from_numpy(atlas_image)
+        atlas_mask = torch.from_numpy(atlas_mask)
         if self.hasMasks:
             labels = torch.from_numpy(labels)
 
         ## return index
         if self.hasMasks:
-            return [image, local_result], str(patient_id), [labels]
+            return [image, atlas_image, atlas_mask], str(patient_id), [labels]
         else:
-            return [image, local_result], str(patient_id)
+            return [image, atlas_image, atlas_mask], str(patient_id)
 
     def __len__(self):
         #Read Data list
@@ -222,40 +240,22 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
     import experiments.Segmentation_Bin_OARs as expConfig
     import systemsetup
-    path = "/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/NPC_MICCAI_2015_original_data/HaN_2015_crop/test_all_headonly_noresample_new"
-    trainset = OARDataset(path, expConfig, mode="train", mask_num = 9, hasMasks=True, AutoChangeDim=False)
+    trainset = OARDataset(systemsetup.DATA_PATH, expConfig, mode="train", mask_num = 9, hasMasks=True, AutoChangeDim=False)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=expConfig.BATCH_SIZE, shuffle=True, pin_memory=False, num_workers=expConfig.DATASET_WORKERS)
 
     for ii, sample in enumerate(trainloader):
-        img = sample[0]
-        gt = sample[2]
-
-        img_i = img[0].numpy()
-        img_local = img[1].numpy()
-        gt = gt[0].numpy()
-
-        print(np.max(gt))
+        img = sample[0].numpy()
+        gt = sample[2].numpy()
 
         print(sample[1])
 
-        for mi in range(9):
-            if np.sum(gt[0, mi, :, :, :]) == 0:
-                continue
-            count_i = 0
-            print(mi)
-            for i in range(img_i.shape[4]):
-                if np.sum(gt[0, mi, :, :, i]) > 0:
-                    print(mi, '-', i)
-                    plt.figure()
-                    plt.title('display')
-                    plt.subplot(131)
-                    plt.imshow(img_i[0, 0, :, :, i])
-                    plt.subplot(132)
-                    plt.imshow(img_local[0, mi, :, :, i])
-                    plt.subplot(133)
-                    plt.imshow(gt[0, mi, :, :, i])
-                    plt.show(block=True)
-
-                    count_i += 1
-                    if count_i >= 5:
-                        break
+        for i in range(96):
+            if np.sum(gt[0,2,:,:,i]) >0:
+                plt.figure()
+                plt.title('display')
+                plt.subplot(211)
+                plt.imshow(img[0, 0, :, :,i])
+                plt.subplot(212)
+                plt.imshow(gt[0, 2, :, :,i])
+                plt.show(block=True)
+                # print('\n')

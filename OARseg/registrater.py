@@ -5,7 +5,6 @@ import NPCUtils
 import numpy as np
 import torch.optim as optim
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
 import os
 import sys
 import dataProcessing.utils as utils
@@ -28,39 +27,7 @@ from torch.utils.checkpoint import checkpoint
 #                'Spinal cord': [86, 86, 40]}
 
 ################organs name########################################
-organs_size = {'Brain Stem': [24, 18, 28, 26, 22, 18],
-               'Optical Nerve': [30, 20, 2, 30, 20, 4],
-               'Optical Chiasm': [14, 14, 2, 14, 14, 4],
-               'Parotid glands': [40, 46, 26, 40, 46, 20],
-               'Mandible': [70, 66, 14, 70, 66, 26],
-               'Submandible glands': [20, 26, 10, 20, 26, 12]}
-
-organs_size_class = {'Brain Stem': 0,
-                     'Optical Nerve': 1,
-                     'Optical Chiasm': 2,
-                     'Parotid glands': 3,
-                     'Mandible': 4,
-                     'Submandible glands': 5}
-
-organs_combine = {'Brain Stem':[1],
-                  'Optical Chiasm':[2],
-                  'Mandible':[3],
-                  'Optical Nerve-L': [4],
-                  'Optical Nerve-R': [5],
-                  'Parotid glands-L':[6],'Parotid glands-R':[7],
-                  'Submandible glands-L':[8], 'Submandible glands-R':[9]}
-
-organs_channels = {'Brain Stem':[0],
-                   'Optical Nerve-L':[1],
-                   'Optical Nerve-R':[1],
-                   'Optical Chiasm':[2],
-                   'Parotid glands-L':[3],'Parotid glands-R':[3],
-                   'Mandible':[4], 'Submandible glands-L':[5], 'Submandible glands-R':[5]}
-organs_num = len(organs_combine)
-organs_combine_name = list(organs_combine.keys())
-
-
-class Segmenter:
+class Registrater:
 
     def __init__(self, expConfig, trainDataLoader, valDataLoader, testDataLoader):
         self.expConfig = expConfig
@@ -140,53 +107,41 @@ class Segmenter:
 
         with torch.no_grad():
             for i, data in enumerate(self.testDataLoader):
-                inputs_list, patient_id = data
-                print("processing {}".format(patient_id[0]))
-
-                inputs = inputs_list[0]
-                local_result = inputs_list[1]
-
-                outputs = torch.zeros_like(local_result)
                 start_time = time.time()
-                outputs_final_seg = torch.zeros_like(local_result)
-                for mrf_i in range(0, 2):
 
-                    net_inputs_list, _, net_mrf_list, crop_size_list, channels_list = \
-                        self.getInputImage(inputs, None, local_result, outputs_final_seg, mrf_i)
+                inputs_list, pid = data
 
-                    organ_num_count = 0
-                    for nil in range(len(net_inputs_list)):
-                        inputs_i = net_inputs_list[nil]
-                        if inputs_i == None:
-                            continue
-                        organ_num_count += 1
+                inputs, inputs_atlas, inputs_atlas_mask = \
+                    inputs_list[0], inputs_list[1], inputs_list[2]
 
-                    for nil in range(len(net_inputs_list)):
-                        inputs_i = net_inputs_list[nil]
-                        if inputs_i == None:
-                            continue
-                        mrf_map_i = net_mrf_list[nil]
-                        output_channels = channels_list[nil]
-                        mask_bbox = crop_size_list[nil]
-                        inputs_i, mrf_map_i = \
-                            inputs_i.to(self.device), mrf_map_i.to(self.device)
+                inputs_shape = inputs.shape
 
-                        outputs_seg = expConfig.net(inputs_i, mrf_map_i)
+                inputs = F.interpolate(inputs, size=(160, 224, 96), mode='trilinear', align_corners=True)
+                inputs_atlas = F.interpolate(inputs_atlas, size=(160, 224, 96), mode='trilinear', align_corners=True)
+                inputs_atlas_mask = F.interpolate(inputs_atlas_mask, size=(160, 224, 96), mode='nearest')
 
-                        for oic in range(len(output_channels)):
-                            out_channel_i = output_channels[oic]
-                            outputs_final_seg[:, nil, :, :, :] = 0
-                            outputs_final_seg[:, nil,
-                            mask_bbox[2]:mask_bbox[5],
-                            mask_bbox[1]:mask_bbox[4],
-                            mask_bbox[0]:mask_bbox[3]] = outputs_seg[:, out_channel_i,
-                                                         :mask_bbox[5] - mask_bbox[2],
-                                                         :mask_bbox[4] - mask_bbox[1],
-                                                         :mask_bbox[3] - mask_bbox[0]]
+                inputs, inputs_atlas, inputs_atlas_mask = \
+                    inputs.to(self.device), inputs_atlas.to(self.device), inputs_atlas_mask.to(self.device)
+
+                outputs_atlas, outputs_atlas_mask, outputs_atlas_affine, outputs_atlas_mask_affine = \
+                    expConfig.net(inputs, inputs_atlas, inputs_atlas_mask)
+
+                outputs_atlas = F.interpolate(outputs_atlas, size=(inputs_shape[2], inputs_shape[3], inputs_shape[4]),
+                                              mode='trilinear', align_corners=True)
+                outputs_atlas_mask = F.interpolate(outputs_atlas_mask, size=(inputs_shape[2], inputs_shape[3], inputs_shape[4]),
+                                                   mode='nearest')
+                outputs_atlas_affine = F.interpolate(outputs_atlas_affine, size=(inputs_shape[2], inputs_shape[3], inputs_shape[4]),
+                                                     mode='trilinear', align_corners=True)
+                outputs_atlas_mask_affine = F.interpolate(outputs_atlas_mask_affine,
+                                                          size=(inputs_shape[2], inputs_shape[3], inputs_shape[4]),
+                                                          mode='nearest')
+
+                outputs = outputs_atlas_mask
 
                 print("Spend Time:", time.time() - start_time)
-                fullsize = outputs_final_seg
 
+                ## final mask
+                fullsize = outputs
                 #binarize output
                 wt = fullsize.chunk(target_class, dim=1)
                 wt = list(wt)
@@ -201,8 +156,43 @@ class Segmenter:
                     result[wt[wn]] = wn+1
 
                 npResult = result[:, :, :].cpu().numpy()
-                npResult = np.transpose(npResult, [1,0,2])
-                path = os.path.join(basePath, "{}_result.nii.gz".format(patient_id[0]))
+                npResult = np.transpose(npResult, [1, 0, 2])
+                path = os.path.join(basePath, "{}_0_result.nii.gz".format(pid[0]))
+                utils.save_nii(path, npResult, None, None)
+
+                ## affine mask
+                fullsize = outputs_atlas_mask_affine
+                # binarize output
+                wt = fullsize.chunk(target_class, dim=1)
+                wt = list(wt)
+                # wt = wt[0]
+                wt_num = len(wt)
+                s = fullsize.shape
+                for wn in range(wt_num):
+                    wt[wn] = (wt[wn] > 0.5).view(s[2], s[3], s[4])
+
+                result = fullsize.new_zeros((s[2], s[3], s[4]), dtype=torch.uint8)
+                for wn in range(wt_num):
+                    result[wt[wn]] = wn + 1
+
+                npResult = result[:, :, :].cpu().numpy()
+                npResult = np.transpose(npResult, [1, 0, 2])
+                path = os.path.join(basePath, "{}_0_result_affine.nii.gz".format(pid[0]))
+                utils.save_nii(path, npResult, None, None)
+
+                ## final image
+                result = outputs_atlas[0, 0, :, :, :]
+                npResult = result[:, :, :].cpu().numpy()
+                npResult = np.transpose(npResult, [1, 0, 2])
+                path = os.path.join(basePath, "{}_0_result_image.nii.gz".format(pid[0]))
+                utils.save_nii(path, npResult, None, None)
+                fullsize = outputs
+
+                ## affine image
+                result = outputs_atlas_affine[0, 0, :, :, :]
+                npResult = result[:, :, :].cpu().numpy()
+                npResult = np.transpose(npResult, [1, 0, 2])
+                path = os.path.join(basePath, "{}_0_result_image_affine.nii.gz".format(pid[0]))
                 utils.save_nii(path, npResult, None, None)
 
         print("Done :)")
@@ -217,10 +207,7 @@ class Segmenter:
         epoch = 1
         while epoch < 10 and epoch <= self.bestMovingAvgEpoch + self.EARLY_STOPPING_AFTER_EPOCHS:
 
-            expConfig.net = expConfig.NoNewReversible_multiview_with_3d_mrf(Final_output=6,
-                                                                            Input_Channels=1,
-                                                                            kernel_size=(3, 3, 3),
-                                                                            kernel_size_2=(3, 3, 1))
+            expConfig.net = expConfig.NoNewReversible_deform_affine()
             expConfig.net = expConfig.net.to(self.device)
             expConfig.INITIAL_LR = 1e-9 * 10 ** (epoch - 1)
             expConfig.optimizer = optim.AdamW(expConfig.net.parameters(), lr=expConfig.INITIAL_LR)
@@ -233,152 +220,56 @@ class Segmenter:
             # set net up training
             self.expConfig.net.train()
             self.mode = "train"
+            torch.cuda.empty_cache()
 
             for i, data in enumerate(self.trainDataLoader):
-
                 # load data
-                inputs, pid, labels = data
-                for ini in range(len(inputs)):
-                    inputs[ini] = inputs[ini].to(self.device)
-                for lai in range(len(labels)):
-                    labels[lai] = labels[lai].to(self.device)
+                inputs_list, pid, labels_list = data
 
-                ori_inputs, ori_labels = inputs[0], labels[0]
-                ori_local_result = inputs[1]
+                inputs, inputs_atlas, inputs_atlas_mask, labels = \
+                    inputs_list[0], inputs_list[1], inputs_list[2], labels_list[0]
 
-                total_loss = 0
+                inputs = F.interpolate(inputs, size=(160, 224, 96), mode='trilinear', align_corners=True)
+                inputs_atlas = F.interpolate(inputs_atlas, size=(160, 224, 96), mode='trilinear', align_corners=True)
+                inputs_atlas_mask = F.interpolate(inputs_atlas_mask, size=(160, 224, 96), mode='nearest')
+                labels = F.interpolate(labels, size=(160, 224, 96), mode='nearest')
 
-                outputs_final_seg = torch.zeros_like(ori_local_result)
-                for mrf_i in range(0, 2):
-                    organ_num_count = 0
-                    loss_n = 0
-                    for oar_i in range(0, organs_num):
+                inputs, inputs_atlas, inputs_atlas_mask, labels = \
+                    inputs.to(self.device), inputs_atlas.to(self.device), inputs_atlas_mask.to(self.device), labels.to(
+                        self.device)
 
-                        inputs = copy.deepcopy(ori_inputs)
-                        labels = copy.deepcopy(ori_labels)
-                        local_result = copy.deepcopy(ori_local_result)
-                        if mrf_i == 0 or epoch < 10:
-                            outputs_deform_new = copy.deepcopy(labels)
-                            if mrf_i == 0:
-                                outputs_mrf = torch.zeros_like(labels)
-                                organs_size_flag = organs_size
-                            else:
-                                outputs_mrf = torch.from_numpy(outputs_final_seg.detach().cpu().numpy()).to(self.device)
-                                organs_size_flag = organs_size
-                        else:
-                            outputs_deform_new = torch.from_numpy(outputs_final_seg.detach().cpu().numpy()).to(
-                                self.device)
-                            outputs_mrf = torch.from_numpy(outputs_final_seg.detach().cpu().numpy()).to(self.device)
-                            if mrf_i == 0:
-                                organs_size_flag = organs_size
-                            else:
-                                organs_size_flag = organs_size
+                outputs_atlas, outputs_atlas_mask, outputs_atlas_affine, outputs_atlas_mask_affine = \
+                    expConfig.net(inputs, inputs_atlas, inputs_atlas_mask)
 
-                        labels_select = torch.zeros_like(labels)
-                        outputs = torch.zeros_like(labels)
+                loss_dice, loss_mse, loss_dist = expConfig.loss([outputs_atlas,
+                                                                 outputs_atlas_mask,
+                                                                 outputs_atlas_affine,
+                                                                 outputs_atlas_mask_affine],
+                                                                [inputs, labels])
 
-                        organ_name_LR = organs_combine_name[oar_i]
-                        organ_channels_list = organs_channels[organ_name_LR]
-                        # print(organ_name_LR)
-                        if '-L' in organ_name_LR:
-                            organ_name = organ_name_LR.split('-L')[0]
-                        elif '-R' in organ_name_LR:
-                            organ_name = organ_name_LR.split('-R')[0]
-                        else:
-                            organ_name = organ_name_LR
+                print("Seg Loss:", loss_dice.item(), " MSE Loss:", loss_mse.item(), " Dist Loss:", loss_dist.item())
 
-                        class_id = organs_size_class[organ_name]
-                        labels_class = torch.tensor([class_id]).to(self.device)
-                        crop_size = organs_size_flag[organ_name]
-                        organ_id_combine = organs_combine[organ_name_LR]
+                loss = loss_dice + loss_mse * 0.5 + loss_dist
 
-                        for oic in range(len(organ_id_combine)):
-                            organ_id = organ_id_combine[oic]
-                            if oic == 0:
-                                output_scores_map = outputs_deform_new[:, organ_id - 1:organ_id, :, :, :]
-                                outputs_mrf_map = outputs_mrf[:, organ_id - 1:organ_id, :, :, :]
-                                labels_flag = labels[:, organ_id - 1:organ_id, :, :, :]
-                            else:
-                                output_scores_map = output_scores_map + outputs_deform_new[:, organ_id - 1:organ_id, :,
-                                                                        :, :]
-                                outputs_mrf_map = outputs_mrf_map + outputs_mrf[:, organ_id - 1:organ_id, :, :, :]
-                                labels_flag = labels_flag + labels[:, organ_id - 1:organ_id, :, :, :]
+                loss.backward()
 
+                del inputs_list, labels_list, \
+                    inputs, inputs_atlas, inputs_atlas_mask, labels, \
+                    outputs_atlas, outputs_atlas_mask, outputs_atlas_affine, outputs_atlas_mask_affine, data
 
-                        if torch.sum(labels_flag).item() == 0:
-                            continue
+                # update params
+                expConfig.optimizer.step()
+                expConfig.optimizer.zero_grad()
 
-                        outputs_seg, mask_bbox = expConfig.net(inputs,
-                                                               output_scores_map,
-                                                               outputs_mrf_map,
-                                                               crop_size)
-
-                        for oic in range(len(organ_id_combine)):
-                            organ_id = organ_id_combine[oic]
-                            outchannel = organ_channels_list[oic]
-                            outputs_final_seg[:, organ_id - 1, :, :, :] = 0
-                            outputs_final_seg[:, organ_id - 1,
-                            mask_bbox[2]:mask_bbox[5],
-                            mask_bbox[1]:mask_bbox[4],
-                            mask_bbox[0]:mask_bbox[3]] = outputs_seg[:, outchannel,
-                                                         :mask_bbox[5] - mask_bbox[2],
-                                                         :mask_bbox[4] - mask_bbox[1],
-                                                         :mask_bbox[3] - mask_bbox[0]]
-                            outputs[:, organ_id - 1,
-                            mask_bbox[2]:mask_bbox[5],
-                            mask_bbox[1]:mask_bbox[4],
-                            mask_bbox[0]:mask_bbox[3]] = outputs_seg[:, outchannel,
-                                                         :mask_bbox[5] - mask_bbox[2],
-                                                         :mask_bbox[4] - mask_bbox[1],
-                                                         :mask_bbox[3] - mask_bbox[0]]
-
-                            labels_select[:, organ_id - 1,
-                            mask_bbox[2]:mask_bbox[5],
-                            mask_bbox[1]:mask_bbox[4],
-                            mask_bbox[0]:mask_bbox[3]] = labels[:, organ_id - 1,
-                                                         mask_bbox[2]:mask_bbox[5],
-                                                         mask_bbox[1]:mask_bbox[4],
-                                                         mask_bbox[0]:mask_bbox[3]]
-
-                            # outputs_crop_val[:, organ_id - 1, mask_bbox[2]:mask_bbox[5], mask_bbox[1]:mask_bbox[4],
-                            #                  mask_bbox[0]:mask_bbox[3]] = 0
-
-                        loss_dice, loss2_list = expConfig.loss(outputs, labels_select)
-
-                        print(mrf_i, " Seg Loss:", loss_dice.item())
-
-                        loss = loss_dice
-
-                        loss_n = loss_n + loss.item()
-
-                        loss = loss / organs_num
-
-                        loss.backward()
-
-
-                        del inputs, labels, \
-                            outputs, outputs_seg, \
-                            labels_class, labels_select, outputs_deform_new, \
-                            outputs_mrf, outputs_mrf_map, output_scores_map, \
-                            mask_bbox
-
-                        organ_num_count += 1
-
-                    # update params
-                    expConfig.optimizer.step()
-                    expConfig.optimizer.zero_grad()
-
-                    total_loss = total_loss + loss_n / organ_num_count
 
                 torch.cuda.empty_cache()
 
-                del ori_inputs, ori_labels, outputs_final_seg, class_id, crop_size, data
+                total_loss = loss.item()
 
-                loss = loss / (mrf_i + 1)
+                del loss, loss_dice, loss_mse
 
                 running_loss += total_loss
                 epoch_running_loss += total_loss
-                del loss
                 if expConfig.LOG_EVERY_K_ITERATIONS > 0:
                     if i % expConfig.LOG_EVERY_K_ITERATIONS == (expConfig.LOG_EVERY_K_ITERATIONS - 1):
                         print('[%d, %5d] loss: %.3f' % (epoch, i + 1, running_loss / expConfig.LOG_EVERY_K_ITERATIONS))
@@ -421,6 +312,8 @@ class Segmenter:
                     sys.exit(1)
 
             epoch = epoch + 1
+            del expConfig.net, expConfig.optimizer
+            torch.cuda.empty_cache()
 
     def train(self):
         expConfig = self.expConfig
@@ -446,95 +339,57 @@ class Segmenter:
 
                 # load data
                 inputs_list, pid, labels_list = data
-                # for ini in range(len(inputs_list)):
-                #     inputs_list[ini] = inputs_list[ini].to(self.device)
-                # for lai in range(len(labels_list)):
-                #     labels_list[lai] = labels_list[lai].to(self.device)
 
-                inputs, labels = inputs_list[0], labels_list[0]
-                local_result = inputs_list[1]
+                inputs, inputs_atlas, inputs_atlas_mask, labels = \
+                    inputs_list[0], inputs_list[1], inputs_list[2], labels_list[0]
 
-                total_loss = 0
+                inputs = F.interpolate(inputs, size=(160, 224, 96), mode='trilinear', align_corners=True)
+                inputs_atlas = F.interpolate(inputs_atlas, size=(160, 224, 96), mode='trilinear', align_corners=True)
+                inputs_atlas_mask = F.interpolate(inputs_atlas_mask, size=(160, 224, 96), mode='nearest')
+                labels = F.interpolate(labels, size=(160, 224, 96), mode='nearest')
 
-                outputs_final_seg = torch.zeros_like(local_result)
-                for mrf_i in range(0, 2):
-                    loss_n = 0
+                inputs, inputs_atlas, inputs_atlas_mask, labels = \
+                    inputs.to(self.device), inputs_atlas.to(self.device), inputs_atlas_mask.to(self.device), labels.to(self.device)
 
-                    net_inputs_list, net_labels_list, net_mrf_list, crop_size_list, channels_list = \
-                        self.getInputImage(inputs, labels, local_result, outputs_final_seg, mrf_i)
+                outputs_atlas, outputs_atlas_mask, outputs_atlas_affine, outputs_atlas_mask_affine = \
+                    expConfig.net(inputs, inputs_atlas, inputs_atlas_mask)
+                # outputs_atlas_affine, outputs_atlas_mask_affine = \
+                #     expConfig.net(inputs, inputs_atlas, inputs_atlas_mask)
 
-                    organ_num_count = 0
-                    for nil in range(len(net_inputs_list)):
-                        inputs_i = net_inputs_list[nil]
-                        if inputs_i == None:
-                            continue
-                        organ_num_count += 1
+                # loss_dice, loss_mse = expConfig.loss([outputs_atlas_affine,
+                #                                       outputs_atlas_mask_affine],
+                #                                      [inputs, labels])
 
-                    for nil in range(len(net_inputs_list)):
-                        inputs_i = net_inputs_list[nil]
-                        if inputs_i == None:
-                            continue
-                        mrf_map_i = net_mrf_list[nil]
-                        labels_i = net_labels_list[nil]
-                        output_channels = channels_list[nil]
-                        mask_bbox = crop_size_list[nil]
+                loss_dice, loss_mse, loss_dist = expConfig.loss([outputs_atlas,
+                                                                 outputs_atlas_mask,
+                                                                 outputs_atlas_affine,
+                                                                 outputs_atlas_mask_affine],
+                                                                [inputs, labels])
 
-                        inputs_i, mrf_map_i, labels_i = \
-                            inputs_i.to(self.device), mrf_map_i.to(self.device), labels_i.to(self.device)
+                print("Seg Loss:", loss_dice.item(), " MSE Loss:", loss_mse.item(), " Dist Loss:", loss_dist.item())
 
+                loss = loss_dice + loss_mse * 0.5 + loss_dist * 5
 
-                        outputs_seg = expConfig.net(inputs_i, mrf_map_i)
+                loss.backward()
 
+                del inputs_list, labels_list, \
+                    inputs, inputs_atlas, inputs_atlas_mask, labels, \
+                    outputs_atlas_affine, outputs_atlas_mask_affine
 
-                        outputs_i = torch.zeros_like(labels_i)
-                        for oic in range(len(output_channels)):
-                            out_channel_i = output_channels[oic]
-                            # print(out_channel_i, "->", nil)
-                            outputs_final_seg[:, nil, :, :, :] = 0
-                            outputs_final_seg[:, nil,
-                            mask_bbox[2]:mask_bbox[5],
-                            mask_bbox[1]:mask_bbox[4],
-                            mask_bbox[0]:mask_bbox[3]] = outputs_seg[:, out_channel_i,
-                                                         :mask_bbox[5] - mask_bbox[2],
-                                                         :mask_bbox[4] - mask_bbox[1],
-                                                         :mask_bbox[3] - mask_bbox[0]]
-                            outputs_i[:, nil, :, :, :] = outputs_seg[:, out_channel_i, :, :, :]
+                for param_group in expConfig.optimizer.param_groups:
+                    print("Current lr: {:.6f}".format(param_group['lr']))
+                # update params
+                expConfig.optimizer.step()
+                expConfig.optimizer.zero_grad()
 
-                        loss_dice = expConfig.loss(outputs_i, labels_i)
+                ## take lr sheudler step
+                if hasattr(expConfig, "lr_sheudler"):
+                    if isinstance(expConfig.lr_sheudler, optim.lr_scheduler.OneCycleLR):
+                        expConfig.lr_sheudler.step()
 
-                        print(mrf_i, " Seg Loss:", loss_dice.item())
+                total_loss = loss.item()
 
-                        loss = loss_dice
-
-                        loss_n = loss_n + loss.item()
-
-                        loss = loss / organ_num_count
-
-                        loss.backward()
-
-                        del inputs_i, labels_i, \
-                            mrf_map_i, outputs_seg, \
-                            outputs_i
-
-                    for param_group in expConfig.optimizer.param_groups:
-                        print("Current lr: {:.6f}".format(param_group['lr']))
-                    # update params
-                    expConfig.optimizer.step()
-                    expConfig.optimizer.zero_grad()
-
-                    ## take lr sheudler step
-                    if hasattr(expConfig, "lr_sheudler"):
-                        if isinstance(expConfig.lr_sheudler, optim.lr_scheduler.OneCycleLR) and mrf_i == 1:
-                            expConfig.lr_sheudler.step()
-
-                    total_loss = total_loss + loss_n / organ_num_count
-
-                    torch.cuda.empty_cache()
-
-                del outputs_final_seg, data, \
-                    inputs_list, labels_list
-
-                total_loss = total_loss / (mrf_i + 1)
+                torch.cuda.empty_cache()
 
                 running_loss += total_loss
                 epoch_running_loss += total_loss
@@ -577,7 +432,8 @@ class Segmenter:
                     WORKSHEET.write(epoch, 4, str(param_group['lr']))
                     EXCEL_WORKBOOK.save(expConfig.EXCEL_SAVE_PATH)
 
-                self.validate(epoch)
+                if epoch % expConfig.VALIDATE_EVERY_K_EPOCHS == expConfig.VALIDATE_EVERY_K_EPOCHS - 1:
+                    self.validate(epoch)
 
             #take lr sheudler step
             if hasattr(expConfig, "lr_sheudler"):
@@ -623,53 +479,25 @@ class Segmenter:
 
                 inputs_list, pid, labels_list = data
 
-                inputs, labels = inputs_list[0], labels_list[0]
-                local_result = inputs_list[1]
+                inputs, inputs_atlas, inputs_atlas_mask, labels = \
+                    inputs_list[0], inputs_list[1], inputs_list[2], labels_list[0]
 
-                outputs_final_seg = torch.zeros_like(local_result)
-                for mrf_i in range(0, 2):
+                inputs = F.interpolate(inputs, size=(160, 224, 96), mode='trilinear', align_corners=True)
+                inputs_atlas = F.interpolate(inputs_atlas, size=(160, 224, 96), mode='trilinear', align_corners=True)
+                inputs_atlas_mask = F.interpolate(inputs_atlas_mask, size=(160, 224, 96), mode='nearest')
+                labels = F.interpolate(labels, size=(160, 224, 96), mode='nearest')
 
-                    net_inputs_list, net_labels_list, net_mrf_list, crop_size_list, channels_list = \
-                        self.getInputImage(inputs, labels, local_result, outputs_final_seg, mrf_i)
+                inputs, inputs_atlas, inputs_atlas_mask, labels = \
+                    inputs.to(self.device), inputs_atlas.to(self.device), inputs_atlas_mask.to(self.device), labels.to(
+                        self.device)
 
-                    organ_num_count = 0
-                    for nil in range(len(net_inputs_list)):
-                        inputs_i = net_inputs_list[nil]
-                        if inputs_i == None:
-                            continue
-                        organ_num_count += 1
+                _, outputs_atlas_mask, _, _ = \
+                    expConfig.net(inputs, inputs_atlas, inputs_atlas_mask)
 
-                    for nil in range(len(net_inputs_list)):
-                        inputs_i = net_inputs_list[nil]
-                        if inputs_i == None:
-                            continue
-                        mrf_map_i = net_mrf_list[nil]
-                        labels_i = net_labels_list[nil]
-                        output_channels = channels_list[nil]
-                        mask_bbox = crop_size_list[nil]
-                        inputs_i, mrf_map_i, labels_i = \
-                            inputs_i.to(self.device), mrf_map_i.to(self.device), labels_i.to(self.device)
+                del inputs_list, labels_list, \
+                    inputs, inputs_atlas, inputs_atlas_mask
 
-
-                        outputs_seg = expConfig.net(inputs_i, mrf_map_i)
-
-
-                        for oic in range(len(output_channels)):
-                            out_channel_i = output_channels[oic]
-                            outputs_final_seg[:, nil, :, :, :] = 0
-                            outputs_final_seg[:, nil,
-                            mask_bbox[2]:mask_bbox[5],
-                            mask_bbox[1]:mask_bbox[4],
-                            mask_bbox[0]:mask_bbox[3]] = outputs_seg[:, out_channel_i,
-                                                         :mask_bbox[5] - mask_bbox[2],
-                                                         :mask_bbox[4] - mask_bbox[1],
-                                                         :mask_bbox[3] - mask_bbox[0]]
-
-                outputs = outputs_final_seg
-
-                del mask_bbox, local_result
-                del outputs_final_seg, data, \
-                    inputs_list, labels_list
+                outputs = outputs_atlas_mask
 
                 #separate outputs channelwise
                 wt = outputs.chunk(target_class, dim=1)
@@ -827,7 +655,7 @@ class Segmenter:
             outputs_deform_new = copy.deepcopy(local_result)
             outputs_mrf = torch.zeros_like(local_result)
         else:
-            if self.epoch_now < 200:
+            if self.epoch_now < 50:
                 outputs_deform_new = copy.deepcopy(local_result)
             else:
                 outputs_deform_new = torch.from_numpy(outputs_final_seg.detach().cpu().numpy())
@@ -838,7 +666,6 @@ class Segmenter:
         for oar_i in range(0, organs_num):
 
             organ_name_LR, organ_name = self._getOrganName(oar_i)
-            # print(organ_name_LR)
             organ_id_combine = organs_combine[organ_name_LR]
 
             ## get location map
@@ -853,9 +680,9 @@ class Segmenter:
                 else:
                     output_scores_map = output_scores_map + outputs_deform_new[:, organ_id - 1:organ_id, :, :, :]
                     outputs_mrf_map[:, organ_id - 1:organ_id, :, :, :] = outputs_mrf[:, organ_id - 1:organ_id, :, :, :]
-                if labels is not None:
-                    if torch.sum(labels[:, organ_id - 1:organ_id, :, :, :]).item() == 0:
-                        labels_flag = 1
+
+                if torch.sum(labels[:, organ_id - 1:organ_id, :, :, :]).item() == 0:
+                    labels_flag = 1
 
             if labels_flag:
                 net_inputs_list.append(None)
@@ -868,68 +695,27 @@ class Segmenter:
             crop_size = organs_size_flag[organ_name]
             output_channels_list.append(organs_channels[organ_name_LR])
             center = self._getCentroid(output_scores_map)
-
-            #################### show ############################
-            # a1 = output_scores_map.numpy()
-            # a2 = outputs_mrf_map.numpy()
-            # a3 = inputs.numpy()
-            # a4 = labels.numpy()
-            #
-            # a1[:, :, center[0]-3:center[0]+3, center[1]-3:center[1]+3, center[2]] = 0
-            # plt.figure()
-            # plt.imshow(a1[0,0,:,:,center[2]])
-            # plt.show(block=True)
-            #################### show ############################
-
-            crop_size = self._getCropSize(output_scores_map, center, crop_size)
-
             mask_bbox = self._getCropImage(output_scores_map, center, crop_size)
-
-            #################### show ############################
-            # a4[:, organ_id_combine[0] - 1, center[0] - 1: center[0] + 2, center[1] - 1: center[1] + 2, center[2] - 1:center[2]+2] = 0
-            #
-            # a4_box = copy.deepcopy(a4)
-            # a4_box[:, organ_id_combine[0] - 1, mask_bbox[2]:mask_bbox[5], mask_bbox[1], mask_bbox[0]:mask_bbox[3]] = 1
-            # a4_box[:, organ_id_combine[0] - 1, mask_bbox[2]:mask_bbox[5], mask_bbox[4] - 1,
-            #        mask_bbox[0]:mask_bbox[3]] = 1
-            # a4_box[:, organ_id_combine[0] - 1, mask_bbox[2], mask_bbox[1]:mask_bbox[4],
-            #        mask_bbox[0]:mask_bbox[3]] = 1
-            # a4_box[:, organ_id_combine[0] - 1, mask_bbox[5] - 1, mask_bbox[1]:mask_bbox[4],
-            #        mask_bbox[0]:mask_bbox[3]] = 1
-            #
-            # for cnc in range(center[2], center[2]+1):
-            #     plt.figure()
-            #     plt.subplot(121)
-            #     plt.imshow(a4[0, organ_id_combine[0]-1, :, :, cnc])
-            #     plt.subplot(122)
-            #     plt.imshow(a4_box[0, organ_id_combine[0]-1, :, :, cnc])
-            #     plt.show(block=True)
-            #################### show ############################
-
             crop_size_list.append(mask_bbox)
 
-            input_crop = torch.zeros([1, int(inputs.shape[1]), crop_size[3] + crop_size[0] + 8,
-                                      crop_size[1] + crop_size[4] + 8, crop_size[2] + crop_size[5] + 4])
+            input_crop = torch.zeros([1, int(inputs.shape[1]), crop_size[3] + crop_size[0],
+                                      crop_size[1] + crop_size[4], crop_size[2] + crop_size[5]])
 
             input_crop[:, :, :mask_bbox[5] - mask_bbox[2], :mask_bbox[4] - mask_bbox[1], :mask_bbox[3] - mask_bbox[0]] = \
                 inputs[:, :, mask_bbox[2]:mask_bbox[5], mask_bbox[1]:mask_bbox[4], mask_bbox[0]:mask_bbox[3]]
 
             if labels is not None:
-                for oic in range(len(organ_id_combine)):
-                    organ_id = organ_id_combine[oic]
-                    label_crop = torch.zeros([1, int(labels.shape[1]), crop_size[3] + crop_size[0] + 8,
-                                              crop_size[1] + crop_size[4] + 8, crop_size[2] + crop_size[5] + 4])
+                label_crop = torch.zeros([1, int(labels.shape[1]), crop_size[3] + crop_size[0],
+                                          crop_size[1] + crop_size[4], crop_size[2] + crop_size[5]])
 
-                    label_crop[:, organ_id - 1, :mask_bbox[5] - mask_bbox[2], :mask_bbox[4] - mask_bbox[1], :mask_bbox[3] - mask_bbox[0]] = \
-                        labels[:, organ_id - 1, mask_bbox[2]:mask_bbox[5], mask_bbox[1]:mask_bbox[4], mask_bbox[0]:mask_bbox[3]]
+                label_crop[:, :, :mask_bbox[5] - mask_bbox[2], :mask_bbox[4] - mask_bbox[1], :mask_bbox[3] - mask_bbox[0]] = \
+                    labels[:, :, mask_bbox[2]:mask_bbox[5], mask_bbox[1]:mask_bbox[4], mask_bbox[0]:mask_bbox[3]]
 
-            for oic in range(len(organ_id_combine)):
-                organ_id = organ_id_combine[oic]
-                mrf_crop = torch.zeros([1, int(outputs_mrf_map.shape[1]), crop_size[3] + crop_size[0] + 8,
-                                        crop_size[1] + crop_size[4] + 8, crop_size[2] + crop_size[5] + 4])
+            mrf_crop = torch.zeros([1, int(outputs_mrf_map.shape[1]), crop_size[3] + crop_size[0],
+                                    crop_size[1] + crop_size[4], crop_size[2] + crop_size[5]])
 
-                mrf_crop[:, organ_id - 1, :mask_bbox[5] - mask_bbox[2], :mask_bbox[4] - mask_bbox[1], :mask_bbox[3] - mask_bbox[0]] = \
-                    outputs_mrf_map[:, organ_id - 1, mask_bbox[2]:mask_bbox[5], mask_bbox[1]:mask_bbox[4], mask_bbox[0]:mask_bbox[3]]
+            mrf_crop[:, :, :mask_bbox[5] - mask_bbox[2], :mask_bbox[4] - mask_bbox[1], :mask_bbox[3] - mask_bbox[0]] = \
+                outputs_mrf_map[:, :, mask_bbox[2]:mask_bbox[5], mask_bbox[1]:mask_bbox[4], mask_bbox[0]:mask_bbox[3]]
 
             net_inputs_list.append(input_crop)
             if labels is not None:
@@ -971,8 +757,6 @@ class Segmenter:
 
         center = (matrix_index_sum / matrix_sum)
 
-        # print(center)
-
         return center.int()
 
     def _getCropImage(self, matrix, center_point, crop_size):
@@ -984,58 +768,23 @@ class Segmenter:
 
         if self.mode == "train":
             crop_size_i = crop_size[5] + crop_size[2]
-            random_i = random.randint(int(-0.1 * crop_size_i), int(0.1 * crop_size_i))
+            random_i = random.randint(int(-0.2 * crop_size_i), int(0.2 * crop_size_i))
             centroid_z = centroid_z + random_i
             crop_size_i = crop_size[4] + crop_size[1]
-            random_i = random.randint(int(-0.1 * crop_size_i), int(0.1 * crop_size_i))
+            random_i = random.randint(int(-0.2 * crop_size_i), int(0.2 * crop_size_i))
             centroid_y = centroid_y + random_i
             crop_size_i = crop_size[3] + crop_size[0]
-            random_i = random.randint(int(-0.1 * crop_size_i), int(0.1 * crop_size_i))
+            random_i = random.randint(int(-0.2 * crop_size_i), int(0.2 * crop_size_i))
             centroid_x = centroid_x + random_i
 
-        z2 = np.minimum(depth, centroid_z + crop_size[5] + 2)
-        y2 = np.minimum(width, centroid_y + crop_size[4] + 4)
-        x2 = np.minimum(height, centroid_x + crop_size[3] + 4)
+        z2 = np.minimum(depth, centroid_z + crop_size[5])# + 3)
+        y2 = np.minimum(width, centroid_y + crop_size[4])# + 6)
+        x2 = np.minimum(height, centroid_x + crop_size[3])# + 6)
 
-        z1 = np.maximum(0, centroid_z - crop_size[2] - 2)
-        y1 = np.maximum(0, centroid_y - crop_size[1] - 4)
-        x1 = np.maximum(0, centroid_x - crop_size[0] - 4)
+        z1 = np.maximum(0, centroid_z - crop_size[2])# - 3)
+        y1 = np.maximum(0, centroid_y - crop_size[1])# - 6)
+        x1 = np.maximum(0, centroid_x - crop_size[0])# - 6)
 
         mask_bbox = [z1, y1, x1, z2, y2, x2]
 
         return mask_bbox
-
-    def _getCropSize(self, matrix, center_point, crop_size):
-
-        centroid_z = center_point[2].item()
-        centroid_y = center_point[1].item()
-        centroid_x = center_point[0].item()
-
-        matrix_x, matrix_y, matrix_z = torch.where(matrix[0,0,:,:,:] == 1)
-        if len(matrix_x):
-            random_pad = random.randint(11, 14)
-            random_pad = random_pad * 0.1
-            crop_size[5] = int((torch.max(matrix_z).item() - centroid_z) * random_pad)
-            random_pad = random.randint(11, 14)
-            random_pad = random_pad * 0.1
-            crop_size[2] = int((centroid_z - torch.min(matrix_z).item()) * random_pad)
-            random_pad = random.randint(11, 14)
-            random_pad = random_pad * 0.1
-            crop_size[4] = int((torch.max(matrix_y).item() - centroid_y) * random_pad)
-            random_pad = random.randint(11, 14)
-            random_pad = random_pad * 0.1
-            crop_size[1] = int((centroid_y - torch.min(matrix_y).item()) * random_pad)
-            random_pad = random.randint(11, 14)
-            random_pad = random_pad * 0.1
-            crop_size[3] = int((torch.max(matrix_x).item() - centroid_x) * random_pad)
-            random_pad = random.randint(11, 14)
-            random_pad = random_pad * 0.1
-            crop_size[0] = int((centroid_x - torch.min(matrix_x).item()) * random_pad)
-
-        for cs in range(len(crop_size)):
-            cs_i = crop_size[cs]
-            while cs_i % 4 != 0:
-                cs_i += 1
-            crop_size[cs] = cs_i
-
-        return crop_size

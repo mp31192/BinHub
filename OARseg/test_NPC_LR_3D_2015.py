@@ -77,14 +77,13 @@ def Cal_HD(pred, target):
 #     if "2015" not in fol:
 #         continue
 #     predict_path = os.path.join(predict_ori_path, fol)
-predict_path = '/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/2019_MICCAI_challenge_NPC/predictbase/202006060911_MICCAI2015OAR_segmentation_CycleOne_noresample'
+predict_path = '/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/2019_MICCAI_challenge_NPC/predictbase/202006131558_MICCAI2015OAR_segmentation_CycleOne_noresample_context_smallestcrop_2down'
 # mask_path = '/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/2019_MICCAI_challenge_NPC/HaN_OAR_crop/test'
 mask_path = '/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/NPC_MICCAI_2015_original_data/HaN_2015_crop/test_all_headonly_noresample_new'
 excel_path = predict_path + '_result.xls'
 
 file_list = os.listdir(predict_path)
 
-## Organs name with L and R
 ## Organs name with L and R
 organs_name_LR = {'1':'Brain Stem','3':'Mandible', '2':'Optical Chiasm',
                   '4':'Optical Nerve-L','5':'Optical Nerve-R','6':'Parotid glands-L',
