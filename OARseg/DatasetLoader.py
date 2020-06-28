@@ -17,7 +17,8 @@ class OARDataset(torch.utils.data.Dataset):
         self.hasMasks = hasMasks
         self.mask_num = mask_num
         self.auto_dim = AutoChangeDim
-        self.local_result_path = "/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/2019_MICCAI_challenge_NPC/predictbase/202006130942_MICCAI2015OAR_registration_alltemplate_globalmaxpooling_morechannels_train"
+        self.local_result_path = "/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/2019_MICCAI_challenge_NPC/predictbase/202006150950_MICCAI2015OAR_registration_alltemplate_globalmaxpooling_morechannels_distloss"
+        self.template_path = "/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/NPC_MICCAI_2015_original_data/HaN_2015_crop/train_all_headonly_affine_template_seg"
 
         #augmentation settings
         self.nnAugmentation = expConfig.NN_AUGMENTATION
@@ -44,10 +45,12 @@ class OARDataset(torch.utils.data.Dataset):
         ## get data path
         image_path = os.path.join(self.filePath, self.file[index] + '_data.nii.gz')
         local_result_path = os.path.join(self.filePath, self.file[index] + '_label.nii.gz')
+        template_path = os.path.join(self.template_path, self.file[index] + '_label.nii.gz')
 
         ## read data
         image = utils.read_nii_image(image_path)
         local_result = utils.read_nii_image(local_result_path)
+        template = utils.read_nii_image(template_path)
 
         ## check the dimension number
         img_shape = image.shape
@@ -77,6 +80,8 @@ class OARDataset(torch.utils.data.Dataset):
             image = image.astype('float32')
             local_result.swapaxes(min_dim, dim_num)
             local_result = local_result.astype('float32')
+            template.swapaxes(min_dim, dim_num)
+            template = template.astype('float32')
             if self.hasMasks:
                 labels.swapaxes(min_dim, dim_num)
                 labels = labels.astype('float32')
@@ -85,6 +90,8 @@ class OARDataset(torch.utils.data.Dataset):
             image = image.astype('float32')
             local_result = np.transpose(local_result, [1, 2, 0])
             local_result = local_result.astype('float32')
+            template = np.transpose(template, [1, 2, 0])
+            template = template.astype('float32')
             if self.hasMasks:
                 labels = np.transpose(labels, [1, 2, 0])
                 labels = labels.astype('float32')
@@ -93,9 +100,11 @@ class OARDataset(torch.utils.data.Dataset):
         ## Additional operation by Bin Huang
         image[image < -900] = -900
         ## image normalization
-        image = self.normalise_image(image, min_intensity=-900)
+        # image = self.normalise_image(image, min_intensity=-900)
+        image = self.ChangetoMultiChannels(image)
 
         local_result = self._toEvaluationOneHot(local_result, self.mask_num)
+        template = self._toEvaluationOneHot(template, self.mask_num)
 
         ## add a channel axis
         if len(img_shape) == image.ndim: image = np.expand_dims(image, -1)
@@ -111,36 +120,39 @@ class OARDataset(torch.utils.data.Dataset):
 
         #augment data
         if self.mode == "train":
-            image, labels, local_result = aug.augment3DImageEdge(image,
-                                                                 labels,
-                                                                 local_result,
-                                                                 defaultLabelValues,
-                                                                 self.nnAugmentation,
-                                                                 self.doRotate,
-                                                                 self.rotDegrees,
-                                                                 self.doScale,
-                                                                 self.scaleFactor,
-                                                                 self.doFlip,
-                                                                 self.doElasticAug,
-                                                                 self.sigma,
-                                                                 self.doIntensityShift,
-                                                                 self.maxIntensityShift)
+            image, labels, local_result, template = aug.augment3DImageEdge(image,
+                                                                           labels,
+                                                                           local_result,
+                                                                           template,
+                                                                           defaultLabelValues,
+                                                                           self.nnAugmentation,
+                                                                           self.doRotate,
+                                                                           self.rotDegrees,
+                                                                           self.doScale,
+                                                                           self.scaleFactor,
+                                                                           self.doFlip,
+                                                                           self.doElasticAug,
+                                                                           self.sigma,
+                                                                           self.doIntensityShift,
+                                                                           self.maxIntensityShift)
 
         image = np.transpose(image, (3, 0, 1, 2))  # bring into NCWH format
         local_result = np.transpose(local_result, (3, 0, 1, 2))
+        template = np.transpose(template, (3, 0, 1, 2))
         if self.hasMasks: labels = np.transpose(labels, (3, 0, 1, 2))  # bring into NCWH format
 
         ## to tensor
         image = torch.from_numpy(image)
         local_result = torch.from_numpy(local_result)
+        template = torch.from_numpy(template)
         if self.hasMasks:
             labels = torch.from_numpy(labels)
 
         ## return index
         if self.hasMasks:
-            return [image, local_result], str(patient_id), [labels]
+            return [image, local_result, template], str(patient_id), [labels]
         else:
-            return [image, local_result], str(patient_id)
+            return [image, local_result, template], str(patient_id)
 
     def __len__(self):
         #Read Data list
@@ -197,23 +209,20 @@ class OARDataset(torch.utils.data.Dataset):
 
     def ChangetoMultiChannels(self, image):
         img_bg = copy.deepcopy(image)
-        img_bg[img_bg != -1000] = 1
-        img_bg[img_bg == -1000] = 0
+        img_bg[img_bg < -900] = -900
+        img_bg[img_bg > 1500] = 1500
         img_c1 = copy.deepcopy(image)
-        img_c1 = self.normalise_image_bin(img_c1, 117.7, 355.8)
-        img_c1 = img_c1 * img_bg
+        img_c1 = self.normalise_image(img_c1, min_intensity=-900)
 
         img_c2 = copy.deepcopy(image)
         img_c2[img_c2 < -450] = -450
         img_c2[img_c2 > 1050] = 1050
-        img_c2 = self.normalise_image_bin(img_c2, 118.9, 302.1)
-        img_c2 = img_c2 * img_bg
+        img_c2 = self.normalise_image(img_c2, min_intensity=-450)
 
         img_c3 = copy.deepcopy(image)
         img_c3[img_c3 < -200] = -200
         img_c3[img_c3 > 300] = 300
-        img_c3 = self.normalise_image_bin(img_c3, 61.0, 127.5)
-        img_c3 = img_c3 * img_bg
+        img_c3 = self.normalise_image(img_c3, min_intensity=-200)
         img_dat = np.stack((img_c1, img_c2, img_c3), 3)
         return img_dat
 

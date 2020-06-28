@@ -17,7 +17,7 @@ class OARDataset(torch.utils.data.Dataset):
         self.hasMasks = hasMasks
         self.mask_num = mask_num
         self.auto_dim = AutoChangeDim
-        self.template_path = "/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/NPC_MICCAI_2015_original_data/HaN_2015_crop/train_all_headonly_template"
+        self.template_path = "/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/NPC_MICCAI_2015_original_data/HaN_2015_crop/train_all_headonly_affine_template"
         self.template_id = template_id
 
         #augmentation settings
@@ -53,8 +53,8 @@ class OARDataset(torch.utils.data.Dataset):
         image = utils.read_nii_image(image_path)
         atlas_image = utils.read_nii_image(atlas_image_path)
         atlas_mask = utils.read_nii_image(atlas_mask_path)
-        atlas_mask[atlas_mask >= 0.3] = 1
-        atlas_mask[atlas_mask < 0.3] = 0
+        # atlas_mask[atlas_mask >= 0.3] = 1
+        # atlas_mask[atlas_mask < 0.3] = 0
 
         ## check the dimension number
         img_shape = image.shape

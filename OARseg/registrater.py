@@ -116,49 +116,49 @@ class Registrater:
 
                 inputs_shape = inputs.shape
 
-                inputs = F.interpolate(inputs, size=(160, 224, 96), mode='trilinear', align_corners=True)
-                inputs_atlas = F.interpolate(inputs_atlas, size=(160, 224, 96), mode='trilinear', align_corners=True)
-                inputs_atlas_mask = F.interpolate(inputs_atlas_mask, size=(160, 224, 96), mode='nearest')
+                inputs = F.interpolate(inputs, size=(224, 160, 96), mode='trilinear', align_corners=True)
+                inputs_atlas = F.interpolate(inputs_atlas, size=(224, 160, 96), mode='trilinear', align_corners=True)
+                inputs_atlas_mask = F.interpolate(inputs_atlas_mask, size=(224, 160, 96), mode='nearest')
 
                 inputs, inputs_atlas, inputs_atlas_mask = \
                     inputs.to(self.device), inputs_atlas.to(self.device), inputs_atlas_mask.to(self.device)
 
-                outputs_atlas, outputs_atlas_mask, outputs_atlas_affine, outputs_atlas_mask_affine = \
+                outputs_atlas_mask_affine = \
                     expConfig.net(inputs, inputs_atlas, inputs_atlas_mask)
 
-                outputs_atlas = F.interpolate(outputs_atlas, size=(inputs_shape[2], inputs_shape[3], inputs_shape[4]),
-                                              mode='trilinear', align_corners=True)
-                outputs_atlas_mask = F.interpolate(outputs_atlas_mask, size=(inputs_shape[2], inputs_shape[3], inputs_shape[4]),
-                                                   mode='nearest')
-                outputs_atlas_affine = F.interpolate(outputs_atlas_affine, size=(inputs_shape[2], inputs_shape[3], inputs_shape[4]),
-                                                     mode='trilinear', align_corners=True)
+                # outputs_atlas = F.interpolate(outputs_atlas, size=(inputs_shape[2], inputs_shape[3], inputs_shape[4]),
+                #                               mode='trilinear', align_corners=True)
+                # outputs_atlas_mask = F.interpolate(outputs_atlas_mask, size=(inputs_shape[2], inputs_shape[3], inputs_shape[4]),
+                #                                    mode='nearest')
+                # outputs_atlas_affine = F.interpolate(outputs_atlas_affine, size=(inputs_shape[2], inputs_shape[3], inputs_shape[4]),
+                #                                      mode='trilinear', align_corners=True)
                 outputs_atlas_mask_affine = F.interpolate(outputs_atlas_mask_affine,
                                                           size=(inputs_shape[2], inputs_shape[3], inputs_shape[4]),
                                                           mode='nearest')
 
-                outputs = outputs_atlas_mask
-
+                # outputs = outputs_atlas_mask
+                #
                 print("Spend Time:", time.time() - start_time)
-
-                ## final mask
-                fullsize = outputs
-                #binarize output
-                wt = fullsize.chunk(target_class, dim=1)
-                wt = list(wt)
-                # wt = wt[0]
-                wt_num = len(wt)
-                s = fullsize.shape
-                for wn in range(wt_num):
-                    wt[wn] = (wt[wn] > 0.5).view(s[2], s[3], s[4])
-
-                result = fullsize.new_zeros((s[2], s[3], s[4]), dtype=torch.uint8)
-                for wn in range(wt_num):
-                    result[wt[wn]] = wn+1
-
-                npResult = result[:, :, :].cpu().numpy()
-                npResult = np.transpose(npResult, [1, 0, 2])
-                path = os.path.join(basePath, "{}_0_result.nii.gz".format(pid[0]))
-                utils.save_nii(path, npResult, None, None)
+                #
+                # ## final mask
+                # fullsize = outputs
+                # #binarize output
+                # wt = fullsize.chunk(target_class, dim=1)
+                # wt = list(wt)
+                # # wt = wt[0]
+                # wt_num = len(wt)
+                # s = fullsize.shape
+                # for wn in range(wt_num):
+                #     wt[wn] = (wt[wn] > 0.3).view(s[2], s[3], s[4])
+                #
+                # result = fullsize.new_zeros((s[2], s[3], s[4]), dtype=torch.uint8)
+                # for wn in range(wt_num):
+                #     result[wt[wn]] = wn+1
+                #
+                # npResult = result[:, :, :].cpu().numpy()
+                # npResult = np.transpose(npResult, [1, 0, 2])
+                # path = os.path.join(basePath, "{}_0_result.nii.gz".format(pid[0]))
+                # utils.save_nii(path, npResult, None, None)
 
                 ## affine mask
                 fullsize = outputs_atlas_mask_affine
@@ -169,7 +169,7 @@ class Registrater:
                 wt_num = len(wt)
                 s = fullsize.shape
                 for wn in range(wt_num):
-                    wt[wn] = (wt[wn] > 0.5).view(s[2], s[3], s[4])
+                    wt[wn] = (wt[wn] > 0.3).view(s[2], s[3], s[4])
 
                 result = fullsize.new_zeros((s[2], s[3], s[4]), dtype=torch.uint8)
                 for wn in range(wt_num):
@@ -180,20 +180,20 @@ class Registrater:
                 path = os.path.join(basePath, "{}_0_result_affine.nii.gz".format(pid[0]))
                 utils.save_nii(path, npResult, None, None)
 
-                ## final image
-                result = outputs_atlas[0, 0, :, :, :]
-                npResult = result[:, :, :].cpu().numpy()
-                npResult = np.transpose(npResult, [1, 0, 2])
-                path = os.path.join(basePath, "{}_0_result_image.nii.gz".format(pid[0]))
-                utils.save_nii(path, npResult, None, None)
-                fullsize = outputs
+                # ## final image
+                # result = outputs_atlas[0, 0, :, :, :]
+                # npResult = result[:, :, :].cpu().numpy()
+                # npResult = np.transpose(npResult, [1, 0, 2])
+                # path = os.path.join(basePath, "{}_0_result_image.nii.gz".format(pid[0]))
+                # utils.save_nii(path, npResult, None, None)
+                # fullsize = outputs
 
                 ## affine image
-                result = outputs_atlas_affine[0, 0, :, :, :]
-                npResult = result[:, :, :].cpu().numpy()
-                npResult = np.transpose(npResult, [1, 0, 2])
-                path = os.path.join(basePath, "{}_0_result_image_affine.nii.gz".format(pid[0]))
-                utils.save_nii(path, npResult, None, None)
+                # result = outputs_atlas_affine[0, 0, :, :, :]
+                # npResult = result[:, :, :].cpu().numpy()
+                # npResult = np.transpose(npResult, [1, 0, 2])
+                # path = os.path.join(basePath, "{}_0_result_image_affine.nii.gz".format(pid[0]))
+                # utils.save_nii(path, npResult, None, None)
 
         print("Done :)")
 
@@ -207,7 +207,7 @@ class Registrater:
         epoch = 1
         while epoch < 10 and epoch <= self.bestMovingAvgEpoch + self.EARLY_STOPPING_AFTER_EPOCHS:
 
-            expConfig.net = expConfig.NoNewReversible_deform_affine()
+            expConfig.net = expConfig.NoNewReversible_affine()
             expConfig.net = expConfig.net.to(self.device)
             expConfig.INITIAL_LR = 1e-9 * 10 ** (epoch - 1)
             expConfig.optimizer = optim.AdamW(expConfig.net.parameters(), lr=expConfig.INITIAL_LR)
@@ -229,33 +229,30 @@ class Registrater:
                 inputs, inputs_atlas, inputs_atlas_mask, labels = \
                     inputs_list[0], inputs_list[1], inputs_list[2], labels_list[0]
 
-                inputs = F.interpolate(inputs, size=(160, 224, 96), mode='trilinear', align_corners=True)
-                inputs_atlas = F.interpolate(inputs_atlas, size=(160, 224, 96), mode='trilinear', align_corners=True)
-                inputs_atlas_mask = F.interpolate(inputs_atlas_mask, size=(160, 224, 96), mode='nearest')
-                labels = F.interpolate(labels, size=(160, 224, 96), mode='nearest')
+                inputs = F.interpolate(inputs, size=(224, 160, 96), mode='trilinear', align_corners=True)
+                inputs_atlas = F.interpolate(inputs_atlas, size=(224, 160, 96), mode='trilinear', align_corners=True)
+                inputs_atlas_mask = F.interpolate(inputs_atlas_mask, size=(224, 160, 96), mode='nearest')
+                labels = F.interpolate(labels, size=(224, 160, 96), mode='nearest')
 
                 inputs, inputs_atlas, inputs_atlas_mask, labels = \
                     inputs.to(self.device), inputs_atlas.to(self.device), inputs_atlas_mask.to(self.device), labels.to(
                         self.device)
 
-                outputs_atlas, outputs_atlas_mask, outputs_atlas_affine, outputs_atlas_mask_affine = \
+                outputs_atlas_mask_affine = \
                     expConfig.net(inputs, inputs_atlas, inputs_atlas_mask)
 
-                loss_dice, loss_mse, loss_dist = expConfig.loss([outputs_atlas,
-                                                                 outputs_atlas_mask,
-                                                                 outputs_atlas_affine,
-                                                                 outputs_atlas_mask_affine],
-                                                                [inputs, labels])
+                loss_dice, loss_mse = expConfig.loss([outputs_atlas_mask_affine],
+                                                     [inputs, labels])
 
-                print("Seg Loss:", loss_dice.item(), " MSE Loss:", loss_mse.item(), " Dist Loss:", loss_dist.item())
+                print("Seg Loss:", loss_dice.item(), " MSE Loss:", loss_mse.item())#, " Dist Loss:", loss_dist.item())
 
-                loss = loss_dice + loss_mse * 0.5 + loss_dist
+                loss = loss_dice + loss_mse * 0.5# + loss_dist
 
                 loss.backward()
 
                 del inputs_list, labels_list, \
                     inputs, inputs_atlas, inputs_atlas_mask, labels, \
-                    outputs_atlas, outputs_atlas_mask, outputs_atlas_affine, outputs_atlas_mask_affine, data
+                    outputs_atlas_mask_affine, data
 
                 # update params
                 expConfig.optimizer.step()
@@ -324,6 +321,9 @@ class Registrater:
 
         epoch = self.startFromEpoch
         self.epoch_now = epoch
+
+        resize_shape = [224, 160, 96]
+
         while epoch < expConfig.EPOCHS and epoch <= self.bestMovingAvgEpoch + self.EARLY_STOPPING_AFTER_EPOCHS:
             expConfig.net.train()
             self.mode = "train"
@@ -343,22 +343,50 @@ class Registrater:
                 inputs, inputs_atlas, inputs_atlas_mask, labels = \
                     inputs_list[0], inputs_list[1], inputs_list[2], labels_list[0]
 
-                inputs = F.interpolate(inputs, size=(160, 224, 96), mode='trilinear', align_corners=True)
-                inputs_atlas = F.interpolate(inputs_atlas, size=(160, 224, 96), mode='trilinear', align_corners=True)
-                inputs_atlas_mask = F.interpolate(inputs_atlas_mask, size=(160, 224, 96), mode='nearest')
-                labels = F.interpolate(labels, size=(160, 224, 96), mode='nearest')
+                inputs_shape = inputs.shape
+
+                resize_ratio = [0, 0, 0]
+
+                resize_ratio[0] = inputs_shape[2] / resize_shape[0]
+                resize_ratio[1] = inputs_shape[3] / resize_shape[1]
+                resize_ratio[2] = inputs_shape[4] / resize_shape[2]
+
+                final_resize_shape = [0, 0, 0]
+
+                resize_arg = np.argmax(resize_ratio)
+                for sss in range(3):
+                    if resize_arg == sss:
+                        final_resize_shape[resize_arg] = resize_shape[resize_arg]
+                    else:
+                        final_resize_shape[sss] = int(resize_shape[sss] / resize_ratio[sss])
+
+                inputs = F.interpolate(inputs, size=final_resize_shape, mode='trilinear', align_corners=True)
+                inputs_atlas = F.interpolate(inputs_atlas, size=final_resize_shape, mode='trilinear', align_corners=True)
+                inputs_atlas_mask = F.interpolate(inputs_atlas_mask, size=final_resize_shape, mode='nearest')
+                labels = F.interpolate(labels, size=final_resize_shape, mode='nearest')
+
+                pad_z1 = int((resize_shape[2] - final_resize_shape[2]) / 2)
+                pad_z2 = int((resize_shape[2] - final_resize_shape[2]) - pad_z1)
+                pad_y1 = int((resize_shape[1] - final_resize_shape[1]) / 2)
+                pad_y2 = int((resize_shape[1] - final_resize_shape[1]) - pad_y1)
+                pad_x1 = int((resize_shape[0] - final_resize_shape[0]) / 2)
+                pad_x2 = int((resize_shape[0] - final_resize_shape[0]) - pad_x1)
+
+                inputs = F.pad(inputs, [pad_z1, pad_z2, pad_y1, pad_y2, pad_x1, pad_x2], "replicate")
+                inputs_atlas = F.pad(inputs_atlas, [pad_z1, pad_z2, pad_y1, pad_y2, pad_x1, pad_x2], "replicate")
+                inputs_atlas_mask = F.pad(inputs_atlas_mask, [pad_z1, pad_z2, pad_y1, pad_y2, pad_x1, pad_x2], "replicate")
+                labels = F.pad(labels, [pad_z1, pad_z2, pad_y1, pad_y2, pad_x1, pad_x2], "constant")
 
                 inputs, inputs_atlas, inputs_atlas_mask, labels = \
                     inputs.to(self.device), inputs_atlas.to(self.device), inputs_atlas_mask.to(self.device), labels.to(self.device)
 
                 outputs_atlas, outputs_atlas_mask, outputs_atlas_affine, outputs_atlas_mask_affine = \
                     expConfig.net(inputs, inputs_atlas, inputs_atlas_mask)
-                # outputs_atlas_affine, outputs_atlas_mask_affine = \
+                # outputs_atlas_mask_affine = \
                 #     expConfig.net(inputs, inputs_atlas, inputs_atlas_mask)
 
-                # loss_dice, loss_mse = expConfig.loss([outputs_atlas_affine,
-                #                                       outputs_atlas_mask_affine],
-                #                                      [inputs, labels])
+                # loss_dice = expConfig.loss([outputs_atlas_mask_affine],
+                #                            [inputs, labels])
 
                 loss_dice, loss_mse, loss_dist = expConfig.loss([outputs_atlas,
                                                                  outputs_atlas_mask,
@@ -368,19 +396,24 @@ class Registrater:
 
                 print("Seg Loss:", loss_dice.item(), " MSE Loss:", loss_mse.item(), " Dist Loss:", loss_dist.item())
 
-                loss = loss_dice + loss_mse * 0.5 + loss_dist * 5
+                loss = loss_dice + loss_mse * 0.5 + loss_dist * 1
+
+                # torch.autograd.set_detect_anomaly(True)
 
                 loss.backward()
 
                 del inputs_list, labels_list, \
                     inputs, inputs_atlas, inputs_atlas_mask, labels, \
-                    outputs_atlas_affine, outputs_atlas_mask_affine
+                    outputs_atlas_mask_affine, outputs_atlas, \
+                    outputs_atlas_mask, outputs_atlas_affine
 
                 for param_group in expConfig.optimizer.param_groups:
                     print("Current lr: {:.6f}".format(param_group['lr']))
                 # update params
                 expConfig.optimizer.step()
                 expConfig.optimizer.zero_grad()
+
+                print("GPU memory:", torch.cuda.max_memory_allocated(device=None))
 
                 ## take lr sheudler step
                 if hasattr(expConfig, "lr_sheudler"):
@@ -459,6 +492,8 @@ class Registrater:
         expConfig = self.expConfig
         expConfig.net.eval()
 
+        resize_shape = [224, 160, 96]
+
         self.mode = "eval"
         startTime = time.time()
         with torch.no_grad():
@@ -482,15 +517,47 @@ class Registrater:
                 inputs, inputs_atlas, inputs_atlas_mask, labels = \
                     inputs_list[0], inputs_list[1], inputs_list[2], labels_list[0]
 
-                inputs = F.interpolate(inputs, size=(160, 224, 96), mode='trilinear', align_corners=True)
-                inputs_atlas = F.interpolate(inputs_atlas, size=(160, 224, 96), mode='trilinear', align_corners=True)
-                inputs_atlas_mask = F.interpolate(inputs_atlas_mask, size=(160, 224, 96), mode='nearest')
-                labels = F.interpolate(labels, size=(160, 224, 96), mode='nearest')
+                inputs_shape = inputs.shape
 
+                resize_ratio = [0, 0, 0]
+
+                resize_ratio[0] = inputs_shape[2] / resize_shape[0]
+                resize_ratio[1] = inputs_shape[3] / resize_shape[1]
+                resize_ratio[2] = inputs_shape[4] / resize_shape[2]
+
+                final_resize_shape = [0, 0, 0]
+
+                resize_arg = np.argmax(resize_ratio)
+                for sss in range(3):
+                    if resize_arg == sss:
+                        final_resize_shape[resize_arg] = resize_shape[resize_arg]
+                    else:
+                        final_resize_shape[sss] = int(resize_shape[sss] / resize_ratio[sss])
+
+                inputs = F.interpolate(inputs, size=final_resize_shape, mode='trilinear', align_corners=True)
+                inputs_atlas = F.interpolate(inputs_atlas, size=final_resize_shape, mode='trilinear',
+                                             align_corners=True)
+                inputs_atlas_mask = F.interpolate(inputs_atlas_mask, size=final_resize_shape, mode='nearest')
+                labels = F.interpolate(labels, size=final_resize_shape, mode='nearest')
+
+                pad_z1 = int((resize_shape[2] - final_resize_shape[2]) / 2)
+                pad_z2 = int((resize_shape[2] - final_resize_shape[2]) - pad_z1)
+                pad_y1 = int((resize_shape[1] - final_resize_shape[1]) / 2)
+                pad_y2 = int((resize_shape[1] - final_resize_shape[1]) - pad_y1)
+                pad_x1 = int((resize_shape[0] - final_resize_shape[0]) / 2)
+                pad_x2 = int((resize_shape[0] - final_resize_shape[0]) - pad_x1)
+
+                inputs = F.pad(inputs, [pad_z1, pad_z2, pad_y1, pad_y2, pad_x1, pad_x2], "replicate")
+                inputs_atlas = F.pad(inputs_atlas, [pad_z1, pad_z2, pad_y1, pad_y2, pad_x1, pad_x2], "replicate")
+                inputs_atlas_mask = F.pad(inputs_atlas_mask, [pad_z1, pad_z2, pad_y1, pad_y2, pad_x1, pad_x2],
+                                          "replicate")
+                labels = F.pad(labels, [pad_z1, pad_z2, pad_y1, pad_y2, pad_x1, pad_x2], "constant")
                 inputs, inputs_atlas, inputs_atlas_mask, labels = \
                     inputs.to(self.device), inputs_atlas.to(self.device), inputs_atlas_mask.to(self.device), labels.to(
                         self.device)
 
+                # outputs_atlas_mask = \
+                #     expConfig.net(inputs, inputs_atlas, inputs_atlas_mask)
                 _, outputs_atlas_mask, _, _ = \
                     expConfig.net(inputs, inputs_atlas, inputs_atlas_mask)
 

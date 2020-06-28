@@ -25,7 +25,7 @@ VALIDATE_EVERY_K_EPOCHS = 1
 INPLACE = True
 
 # hyperparameters
-CHANNELS = [16, 32, 64, 128, 128]
+CHANNELS = [16, 32, 32, 32, 32]
 
 # logging settings
 LOG_EVERY_K_ITERATIONS = 1  # 0 to disable logging
@@ -167,10 +167,10 @@ class EncoderModule(nn.Module):
                 ps = 1
             self.pooling_size += (ps,)
 
-            # if downsample:
-            #     self.pool3d = nn.Conv3d(outChannels,outChannels,self.pooling_size,stride=self.pooling_size, groups = groups_num)
-            #     init.kaiming_normal(self.pool3d.weight)
-            #     self.InNPool = nn.InstanceNorm3d(outChannels)
+        # if downsample:
+        #     self.pool3d = nn.Conv3d(outChannels,outChannels,self.pooling_size,stride=self.pooling_size, groups = groups_num)
+        #     # init.kaiming_normal(self.pool3d.weight)
+        #     self.SwNPool = SwitchNorm3d(outChannels, using_bn=False)
 
     def forward(self, x):
         if self.res_flag:
@@ -183,7 +183,7 @@ class EncoderModule(nn.Module):
             x = x + x_res
         x = self.convDimension(x)
         if self.downsample:
-            # x = self.InNPool(self.pool3d(x))
+            # x = self.SwNPool(self.pool3d(x))
             x = F.max_pool3d(x, self.pooling_size)
         return x
 
@@ -210,11 +210,11 @@ class DecoderModule(nn.Module):
                 ps = 1
             self.pooling_size += (ps,)
 
-            # if self.upsample:
-            #     self.deconv = nn.ConvTranspose3d(outChannels,outChannels,self.pooling_size,stride=self.pooling_size, groups = groups_num,
-            #                                      bias=False)
-            #     init.kaiming_normal_(self.deconv.weight)
-            #     self.InNdeconv = nn.InstanceNorm3d(outChannels)
+        # if self.upsample:
+        #     self.deconv = nn.ConvTranspose3d(outChannels,outChannels,self.pooling_size,stride=self.pooling_size, groups = groups_num,
+        #                                      bias=False)
+        #     # init.kaiming_normal_(self.deconv.weight)
+        #     self.SwNdeconv = SwitchNorm3d(outChannels, using_bn=False)
 
     def forward(self, x):
         if self.res_flag:
@@ -226,7 +226,7 @@ class DecoderModule(nn.Module):
         x = self.convDimension(x)
         if self.upsample:
             x = F.interpolate(x, scale_factor=self.pooling_size, mode="trilinear", align_corners=False)
-            # x = self.InNdeconv(self.deconv(x))
+            # x = self.SwNdeconv(self.deconv(x))
         return x
 
 class EncoderMultiviewModule(nn.Module):
@@ -856,8 +856,8 @@ class NoNewReversible_deform_affine(nn.Module):
         super(NoNewReversible_deform_affine, self).__init__()
         depth = 2
         self.levels = 3
-        self.patchsize = [160, 224, 96]
-        self.firstConv = nn.Conv3d(2, CHANNELS[0], (1, 1, 1), groups=2, padding=(0, 0, 0), bias=True)
+        self.patchsize = [224, 160, 96]
+        self.firstConv = nn.Conv3d(2, CHANNELS[0], (1, 1, 1), padding=(0, 0, 0), bias=True)
         self.decoderConv = nn.Conv3d(CHANNELS[0], CHANNELS[0], (3, 3, 3), padding=(1, 1, 1), bias=False)
         self.TransConv1 = nn.Conv3d(CHANNELS[0], 3, 1, bias=True, padding=(0, 0, 0))
 
@@ -892,12 +892,12 @@ class NoNewReversible_deform_affine(nn.Module):
                 decoderModulesSeg.append(
                     DecoderModule(CHANNELS[self.levels - i] * 2,
                                   CHANNELS[self.levels - i - 1], depth, kernel_size=(3, 3, 3),
-                                  upsample=True, res_flag=True, groups_num=1))
+                                  upsample=True, res_flag=True, groups_num=4))
             else:
                 decoderModulesSeg.append(
                     DecoderModule(CHANNELS[self.levels - i] * 2,
                                   CHANNELS[self.levels - i - 1], depth, kernel_size=(3, 3, 3),
-                                  upsample=True, res_flag=True, groups_num=1))
+                                  upsample=True, res_flag=True, groups_num=4))
         self.decodersSeg = nn.ModuleList(decoderModulesSeg)
 
     def forward(self, input, input_atlas, input_atlas_mask):
@@ -925,7 +925,7 @@ class NoNewReversible_deform_affine(nn.Module):
         x = F.leaky_relu(self.MiddleSwNSeg(self.MiddleConvSeg(x)))
 
         x_affine = self.globalmaxpooling(x)
-        x_affine = x_affine.view(-1, 128)
+        x_affine = x_affine.view(-1, 32)
         # x_affine = x.view(-1, 215040)
         x_affine = self.MiddleFC1(x_affine)
         x_affine = self.MiddleFC2(x_affine)
@@ -956,6 +956,78 @@ class NoNewReversible_deform_affine(nn.Module):
         # x = F.interpolate(x, size=(x_shape, y_shape, z_shape), mode='nearest')
 
         return outputs_atlas, outputs_atlas_mask, outputs_atlas_affine, outputs_atlas_mask_affine
+
+class NoNewReversible_deform(nn.Module):
+    def __init__(self):
+        super(NoNewReversible_deform, self).__init__()
+        depth = 2
+        self.levels = 3
+        self.patchsize = [160, 224, 96]
+        self.firstConv = nn.Conv3d(2, CHANNELS[0], (1, 1, 1), padding=(0, 0, 0), bias=True)
+        self.decoderConv = nn.Conv3d(CHANNELS[0], CHANNELS[0], (3, 3, 3), padding=(1, 1, 1), bias=False)
+        self.TransConv1 = nn.Conv3d(CHANNELS[0], 3, 1, bias=True, padding=(0, 0, 0))
+
+        self.deform = SpatialTransformation(use_gpu=True)
+        # self.deform = SpatialTransformer(self.patchsize)
+
+        ## 3D segmentation
+        # create encoder levels
+        encoderModulesSeg = []
+        for i in range(0, self.levels):
+            encoderModulesSeg.append(
+                EncoderModule(CHANNELS[i], CHANNELS[i + 1], depth, downsample=True, kernel_size=(3, 3, 3),
+                              res_flag=True, se_flag=True, groups_num=1))
+        self.encodersSeg = nn.ModuleList(encoderModulesSeg)
+
+        self.MiddleConvSeg = nn.Conv3d(CHANNELS[i + 1], CHANNELS[i + 1], 1, bias=True)
+        # self.MiddleInNSeg = nn.InstanceNorm3d(CHANNELS_TEMP[i + 1])
+        self.MiddleSwNSeg = SwitchNorm3d(CHANNELS[i + 1], using_bn=False)
+
+        # create decoder levels
+        decoderModulesSeg = []
+        for i in range(0, self.levels):
+            if i == 0:
+                decoderModulesSeg.append(
+                    DecoderModule(CHANNELS[self.levels - i] * 2,
+                                  CHANNELS[self.levels - i - 1], depth, kernel_size=(3, 3, 3),
+                                  upsample=True, res_flag=True, groups_num=4))
+            else:
+                decoderModulesSeg.append(
+                    DecoderModule(CHANNELS[self.levels - i] * 2,
+                                  CHANNELS[self.levels - i - 1], depth, kernel_size=(3, 3, 3),
+                                  upsample=True, res_flag=True, groups_num=4))
+        self.decodersSeg = nn.ModuleList(decoderModulesSeg)
+
+    def forward(self, input, input_atlas, input_atlas_mask):
+
+        _, _, x_shape, y_shape, z_shape = input.shape
+
+        x = torch.cat([input, input_atlas], dim=1)
+
+        x = self.firstConv(x)
+
+        inputStackSeg = []
+        for i in range(self.levels):
+            # inputStackSeg.append(x)
+            x = self.encodersSeg[i](x)
+            inputStackSeg.append(x)
+
+        x = F.leaky_relu(self.MiddleSwNSeg(self.MiddleConvSeg(x)))
+
+        for i in range(self.levels):
+            x = torch.cat([x, inputStackSeg[self.levels - i - 1]], dim=1)
+            x = self.decodersSeg[i](x)
+
+        deform = self.TransConv1(x)
+
+        x_template_ori_concat = torch.cat([input_atlas, input_atlas_mask], dim=1)
+
+        x_template_ori_concat = self.deform(x_template_ori_concat, deform)
+
+        outputs_atlas = x_template_ori_concat[:, 0:1, :, :, :]
+        outputs_atlas_mask = x_template_ori_concat[:, 1:, :, :, :]
+
+        return outputs_atlas, outputs_atlas_mask
 
 class NoNewReversible_deform_affine_crop(nn.Module):
     def __init__(self):
@@ -1062,3 +1134,92 @@ class NoNewReversible_deform_affine_crop(nn.Module):
         # x = F.interpolate(x, size=(x_shape, y_shape, z_shape), mode='nearest')
 
         return outputs_atlas, outputs_atlas_mask, outputs_atlas_affine, outputs_atlas_mask_affine
+
+
+class NoNewReversible_affine(nn.Module):
+    def __init__(self):
+        super(NoNewReversible_affine, self).__init__()
+        depth = 2
+        self.levels = 3
+        self.patchsize = [224, 160, 96]
+        self.firstConv = nn.Conv3d(2, CHANNELS[0], (1, 1, 1), padding=(0, 0, 0), bias=True)
+        self.decoderConv = nn.Conv3d(CHANNELS[0], CHANNELS[0], (3, 3, 3), padding=(1, 1, 1), bias=False)
+        self.TransConv1 = nn.Conv3d(CHANNELS[0], 3, 1, bias=True, padding=(0, 0, 0))
+
+        # self.deform = SpatialTransformation(use_gpu=True)
+        self.deform = SpatialTransformer(self.patchsize)
+
+        ## 3D segmentation
+        # create encoder levels
+        encoderModulesSeg = []
+        for i in range(0, self.levels):
+            encoderModulesSeg.append(
+                EncoderModule(CHANNELS[i], CHANNELS[i + 1], depth, downsample=True, kernel_size=(3, 3, 3),
+                              res_flag=True, se_flag=True, groups_num=1))
+        self.encodersSeg = nn.ModuleList(encoderModulesSeg)
+
+        self.MiddleConvSeg = nn.Conv3d(CHANNELS[i + 1], CHANNELS[i + 1], 1, bias=True)
+        # self.MiddleInNSeg = nn.InstanceNorm3d(CHANNELS_TEMP[i + 1])
+        self.MiddleSwNSeg = SwitchNorm3d(CHANNELS[i + 1], using_bn=False)
+
+        self.globalmaxpooling = nn.AdaptiveMaxPool3d((1, 1, 1))
+        FC1_list = []
+        FC2_list = []
+        for n in range(0, 9):
+            FC1_list.append(nn.Linear(CHANNELS[i + 1], 16))
+            FC2_list.append(nn.Linear(16, 3 * 4))
+            FC2_list[n].weight.data.zero_()
+            FC2_list[n].bias.data.copy_(torch.tensor([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0], dtype=torch.float))
+        self.FC1 = nn.ModuleList(FC1_list)
+        self.FC2 = nn.ModuleList(FC2_list)
+
+    def forward(self, input, input_atlas, input_atlas_mask):
+
+        _, _, x_shape, y_shape, z_shape = input.shape
+
+        x = torch.cat([input, input_atlas], dim=1)
+
+        x = self.firstConv(x)
+
+        inputStackSeg = []
+        for i in range(self.levels):
+            x = self.encodersSeg[i](x)
+            inputStackSeg.append(x)
+
+        x = F.leaky_relu(self.MiddleSwNSeg(self.MiddleConvSeg(x)))
+
+        x_affine = self.globalmaxpooling(x)
+        x_affine = x_affine.view(-1, 256)
+
+        outputs_atlas_mask_affine = torch.zeros_like(input_atlas_mask)
+
+        for i in range(0, 9):
+            x_affine_a1_1 = self.FC1[i](x_affine)
+            x_affine_a1_2 = self.FC2[i](x_affine_a1_1)
+            x_affine_a1_3 = x_affine_a1_2.view(-1, 3, 4)
+            affine_deform1 = (F.affine_grid(x_affine_a1_3, input.shape))
+            # if i == 0:
+            #     affine_deform_all = affine_deform1
+            # else:
+            #     affine_deform_all = affine_deform_all + affine_deform1
+            outputs_atlas_mask_affine[:, i:i+1, :, :, :] = F.grid_sample(input_atlas_mask[:, i:i+1, :, :, :],
+                                                                         affine_deform1, mode='bilinear',
+                                                                         padding_mode="border")
+
+        # affine_deform_all = affine_deform1
+
+        # x_affine_a1_1 = self.FC1[i](x_affine)
+        # x_affine_a1_2 = self.FC2[i](x_affine_a1_1)
+        # x_affine_a1_3 = x_affine_a1_2.view(-1, 3, 4)
+        # affine_deform1 = (F.affine_grid(x_affine_a1_3, input.shape))
+        # a1 = input_atlas_mask[:, i, :, :, :].unsqueeze(1)
+        # a1 = F.grid_sample(a1,
+        #                    affine_deform1, mode='bilinear', padding_mode="border")
+        # outputs_atlas_mask_affine[:, i, :, :, :] = a1[:, 0, :, :, :]
+        #
+        # affine_deform_all = affine_deform1
+
+        # outputs_atlas_affine = F.grid_sample(input_atlas, affine_deform_all, mode='bilinear', padding_mode="border")
+        # outputs_atlas_mask_affine = input_atlas_mask
+
+        return outputs_atlas_mask_affine

@@ -25,7 +25,7 @@ from torch.distributions.normal import Normal
 SAVE_CHECKPOINTS = True  # set to true to create a checkpoint at every epoch
 EXPERIMENT_TAGS = ["bugfreeFinalDrop"]
 EXPERIMENT_NAME = "Reversible NO_NEW60, dropout"
-EPOCHS = 200
+EPOCHS = 300
 BATCH_SIZE = 1
 VIRTUAL_BATCHSIZE = 1
 VALIDATE_EVERY_K_EPOCHS = 1
@@ -52,7 +52,7 @@ SOFT_AUGMENTATION = False  # Soft augmetation directly works on the 3 classes. H
 NN_AUGMENTATION = True  # Has priority over soft/hard augmentation. Uses nearest-neighbor interpolation
 DO_ROTATE = True
 DO_SCALE = True
-DO_FLIP = False
+DO_FLIP = True
 DO_ELASTIC_AUG = False
 DO_INTENSITY_SHIFT = True
 
@@ -294,7 +294,7 @@ class EncoderMultiviewModule(nn.Module):
         x = self.convDimension(x)
         if self.downsample:
             # x = self.SwN(self.pool3d(x))
-            x = F.max_pool3d(x, (2, 2, 1))#self.pooling_size)
+            x = F.max_pool3d(x, (2, 2, 2))#self.pooling_size)
         return x
 
 
@@ -339,214 +339,9 @@ class DecoderMultiviewModule(nn.Module):
             x = x + x_res
         x = self.convDimension(x)
         if self.upsample:
-            x = F.interpolate(x, scale_factor=(2, 2, 1), mode="trilinear", align_corners=False)
+            x = F.interpolate(x, scale_factor=(2, 2, 2), mode="trilinear", align_corners=False)
             # x = self.SwN(self.deconv(x))
         return x
-
-class SpatialTransformation(nn.Module):
-    def __init__(self, use_gpu=False):
-        self.use_gpu = use_gpu
-        super(SpatialTransformation, self).__init__()
-
-    def meshgrid(self, height, width, depth):
-        # x_t = torch.matmul(torch.ones([height, 1]), torch.transpose(torch.unsqueeze(torch.linspace(0.0, width - 1.0, width), 1), 1, 0))
-        # y_t = torch.matmul(torch.unsqueeze(torch.linspace(0.0, height - 1.0, height), 1), torch.ones([1, width]))
-        # y_t = torch.matmul(torch.unsqueeze(torch.linspace(0.0, height - 1.0, height), 1), torch.ones([1, width]))
-
-        x_t = torch.ones([height, width, depth])
-        x_t = torch.mul(x_t, torch.reshape(torch.range(0, height - 1), [height, 1, 1]))
-        y_t = torch.ones([height, width, depth])
-        y_t = torch.mul(y_t, torch.reshape(torch.range(0, width - 1), [1, width, 1]))
-        z_t = torch.ones([height, width, depth])
-        z_t = torch.mul(z_t, torch.reshape(torch.range(0, depth - 1), [1, 1, depth]))
-
-        x_t = x_t.expand([height, width, depth])
-        y_t = y_t.expand([height, width, depth])
-        z_t = z_t.expand([height, width, depth])
-
-        if self.use_gpu == True:
-            x_t = x_t.cuda()
-            y_t = y_t.cuda()
-            z_t = z_t.cuda()
-
-        return x_t, y_t, z_t
-
-    def repeat(self, x, n_repeats):
-        rep = torch.transpose(torch.unsqueeze(torch.ones(n_repeats), 1), 1, 0)
-        rep = rep.long()
-        x = torch.matmul(torch.reshape(x, (-1, 1)), rep)
-        if self.use_gpu:
-            x = x.cuda()
-
-        return torch.squeeze(torch.reshape(x, (-1, 1)))
-
-    def interpolate(self, im, x, y, z):
-
-        im = F.pad(im, (0, 0, 1, 1, 1, 1, 1, 1, 0, 0))
-
-        n_batch, height, width, depth, n_channel = im.shape
-
-        n_batch, out_height, out_width, out_depth = x.shape
-
-        x = x.reshape(1, -1)
-        y = y.reshape(1, -1)
-        z = z.reshape(1, -1)
-
-        x = x + 1
-        y = y + 1
-        z = z + 1
-
-        # print('x',torch.sum(x))
-        # print('y',torch.sum(y))
-        # print('z',torch.sum(z))
-
-        max_x = height - 1
-        max_y = width - 1
-        max_z = depth - 1
-
-        x0 = torch.floor(x).long()
-        x1 = x0 + 1
-        y0 = torch.floor(y).long()
-        y1 = y0 + 1
-        z0 = torch.floor(z).long()
-        z1 = z0 + 1
-
-        # print('flx',torch.sum(x))
-        # print('fly',torch.sum(y))
-        # print('flz',torch.sum(z))
-
-        x0 = torch.clamp(x0, 0, max_x)
-        x1 = torch.clamp(x1, 0, max_x)
-        y0 = torch.clamp(y0, 0, max_y)
-        y1 = torch.clamp(y1, 0, max_y)
-        z0 = torch.clamp(z0, 0, max_z)
-        z1 = torch.clamp(z1, 0, max_z)
-
-        base = self.repeat(torch.arange(0, n_batch) * height * width * depth, out_height * out_width * out_depth)
-
-        base_x0 = base + x0 * width * depth
-        base_x1 = base + x1 * width * depth
-        base00 = base_x0 + y0 * depth
-        base01 = base_x0 + y1 * depth
-        base10 = base_x1 + y0 * depth
-        base11 = base_x1 + y1 * depth
-
-        index000 = base00 + z0
-        index001 = base00 + z1
-        index010 = base01 + z0
-        index011 = base01 + z1
-        index100 = base10 + z0
-        index101 = base10 + z1
-        index110 = base11 + z0
-        index111 = base11 + z1
-
-        # use indices to lookup pixels in the flat image and restore
-        # channels dim
-        im_flat = torch.reshape(im, [-1, n_channel])
-        im_flat = im_flat.float()
-        dim, _ = index000.transpose(1, 0).shape
-        I000 = torch.gather(im_flat, 0, index000.transpose(1, 0).expand(dim, n_channel)).cpu()
-        I001 = torch.gather(im_flat, 0, index001.transpose(1, 0).expand(dim, n_channel)).cpu()
-        I010 = torch.gather(im_flat, 0, index010.transpose(1, 0).expand(dim, n_channel)).cpu()
-        I011 = torch.gather(im_flat, 0, index011.transpose(1, 0).expand(dim, n_channel)).cpu()
-        # print(torch.max(index100))
-        # print(im_flat.shape)
-        I100 = torch.gather(im_flat, 0, index100.transpose(1, 0).expand(dim, n_channel)).cpu()
-        I101 = torch.gather(im_flat, 0, index101.transpose(1, 0).expand(dim, n_channel)).cpu()
-        I110 = torch.gather(im_flat, 0, index110.transpose(1, 0).expand(dim, n_channel)).cpu()
-        I111 = torch.gather(im_flat, 0, index111.transpose(1, 0).expand(dim, n_channel)).cpu()
-
-        # print('x',torch.sum(x))
-        # print('y',torch.sum(y))
-        # print('z',torch.sum(z))
-
-        x1_f = x1.float()
-        y1_f = y1.float()
-        z1_f = z1.float()
-
-        # print('x1_f',torch.sum(x1_f))
-        # print('y1_f',torch.sum(y1_f))
-        # print('z1_f',torch.sum(z1_f))
-
-        dx = x1_f - x
-        dy = y1_f - y
-        dz = z1_f - z
-
-        # print('dx',torch.sum(dx))
-        # print('dy',torch.sum(dy))
-        # print('dz',torch.sum(dz))
-
-        w111 = ((1.0 - dx) * (1.0 - dy) * (1.0 - dz))  # .permute(1,0)
-        w110 = ((1.0 - dx) * (1.0 - dy) * dz)  # .permute(1,0)
-        w101 = ((1.0 - dx) * dy * (1.0 - dz))  # .permute(1,0)
-        w100 = ((1.0 - dx) * dy * dz)  # .permute(1,0)
-        w011 = (dx * (1.0 - dy) * (1.0 - dz))  # .permute(1,0)
-        w010 = (dx * (1.0 - dy) * dz)  # .permute(1,0)
-        w001 = (dx * dy * (1.0 - dz))  # .permute(1,0)
-        w000 = (dx * dy * dz)  # .permute(1,0)
-
-        # w000 = (1.0-dx)*(1.0-dy)*(1.0-dz)#.permute(1,0)
-        # w001 = ((1.0-dx)*(1.0-dy)*dz)#.permute(1,0)
-        # w010 = ((1.0 - dx) * dy * (1.0 - dz))#.permute(1,0)
-        # w011 = ((1.0 - dx) * dy * dz)#.permute(1,0)
-        # w100 = (dx * (1.0 - dy) * (1.0 - dz))#.permute(1,0)
-        # w101 = (dx * (1.0 - dy) * dz)#.permute(1,0)
-        # w110 = (dx * dy * (1.0 - dz))#.permute(1,0)
-        # w111 = (dx * dy * dz)#.permute(1,0)
-
-        w111 = w111.permute(1, 0).cpu()
-        w110 = w110.permute(1, 0).cpu()
-        w101 = w101.permute(1, 0).cpu()
-        w100 = w100.permute(1, 0).cpu()
-        w011 = w011.permute(1, 0).cpu()
-        w010 = w010.permute(1, 0).cpu()
-        w001 = w001.permute(1, 0).cpu()
-        w000 = w000.permute(1, 0).cpu()
-
-        m000 = w000 * I000
-        m001 = w001 * I001
-        m010 = w010 * I010
-        m011 = w011 * I011
-        m100 = w100 * I100
-        m101 = w101 * I101
-        m110 = w110 * I110
-        m111 = w111 * I111
-
-        output = torch.sum(torch.squeeze(torch.stack([m000, m001, m010, m011,
-                                                      m100, m101, m110, m111], dim=1)), 1)
-
-        output = output.cuda()
-
-        # output = torch.sum(torch.squeeze(torch.stack([w000 * I000, w001 * I001, w010 * I010, w011 * I011,
-        #                                               w100 * I100, w101 * I101, w110 * I110, w111 * I111], dim = 1)), 1)
-        output = torch.reshape(output, [n_batch, out_height, out_width, out_depth, n_channel])
-
-        output = output.permute(0, 4, 1, 2, 3)
-
-        return output
-
-    def forward(self, moving_image, deformation_matrix):
-        moving_image = moving_image.permute(0, 2, 3, 4, 1)
-        deformation_matrix = deformation_matrix.permute(0, 2, 3, 4, 1)
-
-        dx = deformation_matrix[:, :, :, :, 0]
-        dy = deformation_matrix[:, :, :, :, 1]
-        dz = deformation_matrix[:, :, :, :, 2]
-
-        n_batch, height, width, depth = dx.shape
-
-        x_mesh, y_mesh, z_mesh = self.meshgrid(height, width, depth)
-
-        x_mesh = x_mesh.expand([n_batch, height, width, depth])
-        y_mesh = y_mesh.expand([n_batch, height, width, depth])
-        z_mesh = z_mesh.expand([n_batch, height, width, depth])
-
-        x_new = dx + x_mesh
-        y_new = dy + y_mesh
-        z_new = dz + z_mesh
-
-        return self.interpolate(moving_image, x_new, y_new, z_new)
-
 
 class SwitchNorm3d(nn.Module):
     def __init__(self, num_features, eps=1e-5, momentum=0.997, using_moving_average=True, using_bn=True,
@@ -627,129 +422,6 @@ class SwitchNorm3d(nn.Module):
         x = (x - mean) / (var + self.eps).sqrt()
         x = x.view(N, C, D, H, W)
         return x * self.weight + self.bias
-
-class SpatialTransformer(nn.Module):
-    """
-    [SpatialTransformer] represesents a spatial transformation block
-    that uses the output from the UNet to preform an grid_sample
-    https://pytorch.org/docs/stable/nn.functional.html#grid-sample
-    """
-
-    def __init__(self, size, mode='bilinear'):
-        """
-        Instiatiate the block
-            :param size: size of input to the spatial transformer block
-            :param mode: method of interpolation for grid_sampler
-        """
-        super(SpatialTransformer, self).__init__()
-
-        # Create sampling grid
-        vectors = [torch.arange(0, s) for s in size]
-        grids = torch.meshgrid(vectors)
-        grid = torch.stack(grids)  # y, x, z
-        grid = torch.unsqueeze(grid, 0)  # add batch
-        grid = grid.type(torch.FloatTensor)
-        self.register_buffer('grid', grid)
-
-        # print(torch.max(grid[:, 0, :, :, :]).item())
-        # print(torch.max(grid[:, 1, :, :, :]).item())
-        # print(torch.max(grid[:, 2, :, :, :]).item())
-
-        self.mode = mode
-
-    def forward(self, src, flow):
-        """
-        Push the src and flow through the spatial transform block
-            :param src: the original moving image
-            :param flow: the output from the U-Net
-        """
-        new_locs = self.grid + flow
-
-        shape = flow.shape[2:]
-
-        # Need to normalize grid values to [-1, 1] for resampler
-        for i in range(len(shape)):
-            new_locs[:, i, ...] = 2 * (new_locs[:, i, ...] / (shape[i] - 1) - 0.5)
-            # print(torch.max(new_locs[:, i, ...]).item(), torch.min(new_locs[:, i, ...]).item())
-
-        if len(shape) == 2:
-            new_locs = new_locs.permute(0, 2, 3, 1)
-            new_locs = new_locs[..., [1, 0]]
-        elif len(shape) == 3:
-            new_locs = new_locs.permute(0, 2, 3, 4, 1)
-            # for i in range(len(shape)):
-            #     print(torch.max(new_locs[:, :, :, :, i]).item(), torch.min(new_locs[:, :, :, :, i]).item())
-            new_locs = new_locs[..., [2, 1, 0]]
-            # for i in range(len(shape)):
-            #     print(torch.max(new_locs[:, :, :, :, i]).item(), torch.min(new_locs[:, :, :, :, i]).item())
-
-        return F.grid_sample(src, new_locs, mode=self.mode)
-
-class SpatialTransformerAutoSize(nn.Module):
-    """
-    [SpatialTransformer] represesents a spatial transformation block
-    that uses the output from the UNet to preform an grid_sample
-    https://pytorch.org/docs/stable/nn.functional.html#grid-sample
-    """
-
-    def __init__(self, mode='bilinear'):
-        """
-        Instiatiate the block
-            :param mode: method of interpolation for grid_sampler
-        """
-        super(SpatialTransformerAutoSize, self).__init__()
-
-        # Create sampling grid
-        # vectors = [torch.arange(0, s) for s in size]
-        # grids = torch.meshgrid(vectors)
-        # grid = torch.stack(grids)  # y, x, z
-        # grid = torch.unsqueeze(grid, 0)  # add batch
-        # grid = grid.type(torch.FloatTensor)
-        # self.register_buffer('grid', grid)
-
-        # print(torch.max(grid[:, 0, :, :, :]).item())
-        # print(torch.max(grid[:, 1, :, :, :]).item())
-        # print(torch.max(grid[:, 2, :, :, :]).item())
-
-        self.mode = mode
-
-    def forward(self, src, flow):
-        """
-        Push the src and flow through the spatial transform block
-            :param src: the original moving image
-            :param flow: the output from the U-Net
-        """
-
-        shape = flow.shape[2:]
-
-        size = shape
-
-        vectors = [torch.arange(0, s) for s in size]
-        grids = torch.meshgrid(vectors)
-        grid = torch.stack(grids)  # x, y, z
-        grid = torch.unsqueeze(grid, 0)  # add batch
-        grid = grid.type(torch.FloatTensor).cuda()
-        # self.register_buffer('grid', grid)
-
-        new_locs = grid + flow
-
-        # Need to normalize grid values to [-1, 1] for resampler
-        for i in range(len(shape)):
-            new_locs[:, i, ...] = 2 * (new_locs[:, i, ...] / (shape[i] - 1) - 0.5)
-            # print(torch.max(new_locs[:, i, ...]).item(), torch.min(new_locs[:, i, ...]).item())
-
-        if len(shape) == 2:
-            new_locs = new_locs.permute(0, 2, 3, 1)
-            new_locs = new_locs[..., [1, 0]]
-        elif len(shape) == 3:
-            new_locs = new_locs.permute(0, 2, 3, 4, 1)
-            # for i in range(len(shape)):
-            #     print(torch.max(new_locs[:, :, :, :, i]).item(), torch.min(new_locs[:, :, :, :, i]).item())
-            new_locs = new_locs[..., [2, 1, 0]]
-            # for i in range(len(shape)):
-            #     print(torch.max(new_locs[:, :, :, :, i]).item(), torch.min(new_locs[:, :, :, :, i]).item())
-
-        return F.grid_sample(src, new_locs, mode=self.mode)
 
 class CentroidLayer(nn.Module):
     def __init__(self):
@@ -872,7 +544,7 @@ class NoNewReversible_multiview_with_3d_mrf_nocrop(nn.Module):
         depth = 2
         self.levels = 2
         self.Final_output = Final_output
-        self.firstConvSeg = nn.Conv3d(Input_Channels + 9, CHANNELS[0], (1, 1, 1), padding=(0, 0, 0), bias=True)
+        self.firstConvSeg = nn.Conv3d(Input_Channels + Final_output, CHANNELS[0], (1, 1, 1), padding=(0, 0, 0), bias=True)
         self.lastConv = nn.Conv3d(CHANNELS[0] * 2, Final_output, 1, bias=True)
         ## 3D segmentation
         # create encoder levels
@@ -892,6 +564,8 @@ class NoNewReversible_multiview_with_3d_mrf_nocrop(nn.Module):
         # self.MiddleInNSeg = nn.InstanceNorm3d(CHANNELS[i + 1])
         self.MiddleSwNSeg = SwitchNorm3d(CHANNELS[i + 1], using_bn=False)
 
+        self.drop = nn.Dropout3d(p=0.2)
+
         # create decoder levels
         decoderModulesSeg = []
         for i in range(0, self.levels):
@@ -904,6 +578,190 @@ class NoNewReversible_multiview_with_3d_mrf_nocrop(nn.Module):
                                        CHANNELS[self.levels - i - 1], depth,
                                        kernel_size=kernel_size, kernel_size_2=kernel_size_2,
                                        upsample=upsample_flag, res_flag=True, groups_num=1))
+        self.decodersSeg = nn.ModuleList(decoderModulesSeg)
+
+    def forward(self, input, mrf_result):
+        ## Seperate image
+
+        x_input = self.firstConvSeg(torch.cat([input, mrf_result], dim=1))
+        x = x_input
+        ## 3D segmentation
+        inputStackSeg = []
+        for i in range(self.levels):
+            # inputStackSeg.append(x)
+            x = self.encodersSeg[i](x)
+            inputStackSeg.append(x)
+            x = self.drop(x)
+
+        x = F.leaky_relu(self.MiddleSwNSeg(self.MiddleConvSeg(x)))
+        x = self.drop(x)
+
+        for i in range(self.levels):
+            x = torch.cat([x, inputStackSeg[self.levels - i - 1]], dim=1)
+            x = self.decodersSeg[i](x)
+            x = self.drop(x)
+
+        x = torch.cat([x, x_input], dim=1)
+        # x = self.OutConv1(x)
+        output = self.lastConv(x)
+        output = self.drop(output)
+        output = F.sigmoid(output)
+        return output
+
+class NoNewReversible_multiview_with_3d_mrf_template_nocrop(nn.Module):
+    def __init__(self, Final_output=1, Input_Channels=1, kernel_size = (3, 3, 3), kernel_size_2 = (3, 3, 1)):
+        super(NoNewReversible_multiview_with_3d_mrf_template_nocrop, self).__init__()
+        depth = 2
+        self.levels = 2
+        self.Final_output = Final_output
+        self.firstConvSeg = nn.Conv3d(Input_Channels + Final_output, CHANNELS[0], (1, 1, 1), padding=(0, 0, 0), bias=True)
+        self.firstConvSegTemp = nn.Conv3d(Final_output, CHANNELS[0], (1, 1, 1), padding=(0, 0, 0),
+                                          bias=True)
+        self.lastConv = nn.Conv3d(CHANNELS[0] * 2, Final_output, 1, bias=True)
+        ## 3D segmentation
+        # create encoder levels
+        encoderModulesSeg = []
+        for i in range(0, self.levels):
+            if i == 0:
+                downsample_flag = True
+            else:
+                downsample_flag = True
+            encoderModulesSeg.append(
+                EncoderMultiviewModule(CHANNELS[i], CHANNELS[i + 1], depth, downsample=downsample_flag,
+                                       kernel_size=kernel_size, kernel_size_2=kernel_size_2,
+                                       res_flag=True, se_flag=True, groups_num=1))
+        self.encodersSeg = nn.ModuleList(encoderModulesSeg)
+
+        self.MiddleConvSeg = nn.Conv3d(CHANNELS[i + 1], CHANNELS[i + 1], 1, bias=True)
+        # self.MiddleInNSeg = nn.InstanceNorm3d(CHANNELS[i + 1])
+        self.MiddleSwNSeg = SwitchNorm3d(CHANNELS[i + 1], using_bn=False)
+
+        self.drop = nn.Dropout3d(p=0.2)
+
+        # create decoder levels
+        decoderModulesSeg = []
+        for i in range(0, self.levels):
+            if i == self.levels - 1:
+                upsample_flag = True
+            else:
+                upsample_flag = True
+            decoderModulesSeg.append(
+                DecoderMultiviewModule(CHANNELS[self.levels - i] * 2,
+                                       CHANNELS[self.levels - i - 1], depth,
+                                       kernel_size=kernel_size, kernel_size_2=kernel_size_2,
+                                       upsample=upsample_flag, res_flag=True, groups_num=1))
+        self.decodersSeg = nn.ModuleList(decoderModulesSeg)
+
+        ## 3D template segmentation
+        # create encoder levels
+        encoderModulesSegTemp = []
+        for i in range(0, self.levels):
+            if i == 0:
+                downsample_flag = True
+            else:
+                downsample_flag = True
+            encoderModulesSegTemp.append(
+                EncoderMultiviewModule(CHANNELS[i], CHANNELS[i + 1], depth, downsample=downsample_flag,
+                                       kernel_size=kernel_size, kernel_size_2=kernel_size_2,
+                                       res_flag=True, se_flag=True, groups_num=10))
+        self.encodersSegTemp = nn.ModuleList(encoderModulesSegTemp)
+
+        self.MiddleConvSegTemp = nn.Conv3d(CHANNELS[i + 1], CHANNELS[i + 1], 1, bias=True)
+        # self.MiddleInNSeg = nn.InstanceNorm3d(CHANNELS[i + 1])
+        self.MiddleSwNSegTemp = SwitchNorm3d(CHANNELS[i + 1], using_bn=False)
+
+        # create decoder levels
+        decoderModulesSegTemp = []
+        for i in range(0, self.levels):
+            if i == self.levels - 1:
+                upsample_flag = True
+            else:
+                upsample_flag = True
+            decoderModulesSegTemp.append(
+                DecoderMultiviewModule(CHANNELS[self.levels - i] * 2,
+                                       CHANNELS[self.levels - i - 1], depth,
+                                       kernel_size=kernel_size, kernel_size_2=kernel_size_2,
+                                       upsample=upsample_flag, res_flag=True, groups_num=10))
+        self.decodersSegTemp = nn.ModuleList(decoderModulesSegTemp)
+
+    def forward(self, input, mrf_result, template):
+        ## Seperate image
+
+        x_input = self.firstConvSeg(torch.cat([input, mrf_result], dim=1))
+        x = x_input
+
+        x_temp = self.firstConvSegTemp(template)
+
+        ## 3D segmentation
+        inputStackSeg = []
+        inputStackSegTemp = []
+        for i in range(self.levels):
+            # inputStackSeg.append(x)
+            x = self.encodersSeg[i](x)
+            x_temp = self.encodersSegTemp[i](x_temp)
+            x = x + x_temp
+            inputStackSeg.append(x)
+            inputStackSegTemp.append(x_temp)
+            x = self.drop(x)
+
+        x = F.leaky_relu(self.MiddleSwNSeg(self.MiddleConvSeg(x)))
+        x_temp = F.leaky_relu(self.MiddleConvSegTemp(self.MiddleConvSegTemp(x_temp)))
+        x = x + x_temp
+        x = self.drop(x)
+
+        for i in range(self.levels):
+            x = torch.cat([x, inputStackSeg[self.levels - i - 1]], dim=1)
+            x = self.decodersSeg[i](x)
+            x_temp = torch.cat([x_temp, inputStackSegTemp[self.levels - i - 1]], dim=1)
+            x_temp = self.decodersSegTemp[i](x_temp)
+            x = x + x_temp
+            x = self.drop(x)
+
+        x = torch.cat([x, x_input], dim=1)
+        # x = self.OutConv1(x)
+        output = self.lastConv(x)
+        output = self.drop(output)
+        output = F.sigmoid(output)
+        return output
+
+class NoNewReversible_multiview_with_3donly_mrf_nocrop(nn.Module):
+    def __init__(self, Final_output=1, Input_Channels=1, kernel_size = (3, 3, 3), kernel_size_2 = (3, 3, 1)):
+        super(NoNewReversible_multiview_with_3donly_mrf_nocrop, self).__init__()
+        depth = 2
+        self.levels = 2
+        self.Final_output = Final_output
+        self.firstConvSeg = nn.Conv3d(Input_Channels + 6, CHANNELS[0], (1, 1, 1), padding=(0, 0, 0), bias=True)
+        self.lastConv = nn.Conv3d(CHANNELS[0] * 2, Final_output, 1, bias=True)
+        ## 3D segmentation
+        # create encoder levels
+        encoderModulesSeg = []
+        for i in range(0, self.levels):
+            if i == 0:
+                downsample_flag = True
+            else:
+                downsample_flag = True
+            encoderModulesSeg.append(
+                EncoderModule(CHANNELS[i], CHANNELS[i + 1], depth, downsample=downsample_flag,
+                              kernel_size=kernel_size,
+                              res_flag=True, se_flag=True, groups_num=1))
+        self.encodersSeg = nn.ModuleList(encoderModulesSeg)
+
+        self.MiddleConvSeg = nn.Conv3d(CHANNELS[i + 1], CHANNELS[i + 1], 1, bias=True)
+        # self.MiddleInNSeg = nn.InstanceNorm3d(CHANNELS[i + 1])
+        self.MiddleSwNSeg = SwitchNorm3d(CHANNELS[i + 1], using_bn=False)
+
+        # create decoder levels
+        decoderModulesSeg = []
+        for i in range(0, self.levels):
+            if i == self.levels - 1:
+                upsample_flag = True
+            else:
+                upsample_flag = True
+            decoderModulesSeg.append(
+                DecoderModule(CHANNELS[self.levels - i] * 2,
+                              CHANNELS[self.levels - i - 1], depth,
+                              kernel_size=kernel_size,
+                              upsample=upsample_flag, res_flag=True, groups_num=1))
         self.decodersSeg = nn.ModuleList(decoderModulesSeg)
 
     def forward(self, input, mrf_result):

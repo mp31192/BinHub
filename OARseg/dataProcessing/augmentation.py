@@ -93,7 +93,7 @@ def augment3DImage(img, lbl, defaultLabelValues, nnAug, do_rotate=True, rotDegre
 
     return img.copy(), lbl.copy() #pytorch cannot handle negative stride in view
 
-def augment3DImageEdge(img, lbl, edge, defaultLabelValues, nnAug, do_rotate=True, rotDegrees=20, do_scale=True, scaleFactor=1.1, do_flip=True, do_elasticAug=True, sigma=10, do_intensityShift=True, maxIntensityShift=0.1):
+def augment3DImageEdge(img, lbl, edge, template,defaultLabelValues, nnAug, do_rotate=True, rotDegrees=20, do_scale=True, scaleFactor=1.1, do_flip=True, do_elasticAug=True, sigma=10, do_intensityShift=True, maxIntensityShift=0.1):
     '''
     Function for augmentation of a 3D image. It will transform the image and corresponding labels
     by a number of optional transformations.
@@ -124,6 +124,7 @@ def augment3DImageEdge(img, lbl, edge, defaultLabelValues, nnAug, do_rotate=True
             img[:, :, z, :] = utils.rotate_image(img[:, :, z, :], random_angle)
             lbl[:, :, z, :] = utils.rotate_image(lbl[:, :, z, :], random_angle, interpolationMethod)
             edge[:, :, z, :] = utils.rotate_image(edge[:, :, z, :], random_angle, interpolationMethod)
+            template[:, :, z, :] = utils.rotate_image(template[:, :, z, :], random_angle, interpolationMethod)
 
     # RANDOM SCALE
     if do_scale:
@@ -133,14 +134,17 @@ def augment3DImageEdge(img, lbl, edge, defaultLabelValues, nnAug, do_rotate=True
             imgScaled = utils.resize_image(img[:, :, z, :], scaledSize)
             lblScaled = utils.resize_image(lbl[:, :, z, :], scaledSize, interpolationMethod)
             edgeScaled = utils.resize_image(edge[:, :, z, :], scaledSize, interpolationMethod)
+            templateScaled = utils.resize_image(template[:, :, z, :], scaledSize, interpolationMethod)
             if scale < 1:
                 img[:, :, z, :] = padToSize(imgScaled, [xSize, ySize], defaultPerChannel)
                 lbl[:, :, z, :] = padToSize(lblScaled, [xSize, ySize], defaultLabelValues)
                 edge[:, :, z, :] = padToSize(edgeScaled, [xSize, ySize], defaultLabelValues)
+                template[:, :, z, :] = padToSize(templateScaled, [xSize, ySize], defaultLabelValues)
             else:
                 img[:, :, z, :] = cropToSize(imgScaled, [xSize, ySize])
                 lbl[:, :, z, :] = cropToSize(lblScaled, [xSize, ySize])
                 edge[:, :, z, :] = cropToSize(edgeScaled, [xSize, ySize])
+                template[:, :, z, :] = cropToSize(templateScaled, [xSize, ySize])
 
     # RANDOM ELASTIC DEFOMRATIONS (like in U-NET)
     if do_elasticAug:
@@ -159,6 +163,7 @@ def augment3DImageEdge(img, lbl, edge, defaultLabelValues, nnAug, do_rotate=True
             img[:, :, z, :] = utils.dense_image_warp(img[:, :, z, :], dx_img, dy_img)
             lbl[:, :, z, :] = utils.dense_image_warp(lbl[:, :, z, :], dx_img, dy_img, interpolationMethod)
             edge[:, :, z, :] = utils.dense_image_warp(edge[:, :, z, :], dx_img, dy_img, interpolationMethod)
+            template[:, :, z, :] = utils.dense_image_warp(template[:, :, z, :], dx_img, dy_img, interpolationMethod)
 
     # RANDOM INTENSITY SHIFT
     if do_intensityShift:
@@ -172,8 +177,9 @@ def augment3DImageEdge(img, lbl, edge, defaultLabelValues, nnAug, do_rotate=True
                 img = np.flip(img, axis=i)
                 lbl = np.flip(lbl, axis=i)
                 edge = np.flip(edge, axis=i)
+                template = np.flip(template, axis=i)
 
-    return img.copy(), lbl.copy(), edge.copy() #pytorch cannot handle negative stride in view
+    return img.copy(), lbl.copy(), edge.copy(), template.copy() #pytorch cannot handle negative stride in view
 
 def augment3DImageEdgeTemp(img, lbl, edge, temp_edge,defaultLabelValues, nnAug, do_rotate=True, rotDegrees=20, do_scale=True, scaleFactor=1.1, do_flip=True, do_elasticAug=True, sigma=10, do_intensityShift=True, maxIntensityShift=0.1):
     '''

@@ -77,12 +77,12 @@ def Cal_HD(pred, target):
 #     if "2015" not in fol:
 #         continue
 #     predict_path = os.path.join(predict_ori_path, fol)
-predict_path = '/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/2019_MICCAI_challenge_NPC/predictbase/202006131558_MICCAI2015OAR_segmentation_CycleOne_noresample_context_smallestcrop_2down'
+predict_path = '/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/NPC_MICCAI_2015_original_data/HaN_2015_crop/train_all_headonly_affine_template_seg'
 # mask_path = '/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/2019_MICCAI_challenge_NPC/HaN_OAR_crop/test'
 mask_path = '/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/NPC_MICCAI_2015_original_data/HaN_2015_crop/test_all_headonly_noresample_new'
 excel_path = predict_path + '_result.xls'
 
-file_list = os.listdir(predict_path)
+file_list = os.listdir(mask_path)
 
 ## Organs name with L and R
 organs_name_LR = {'1':'Brain Stem','3':'Mandible', '2':'Optical Chiasm',
@@ -114,7 +114,7 @@ R = 0
 
 for fl in file_list:
     predict_name = fl
-    if 'result.nii.gz' not in predict_name:
+    if 'label.nii.gz' not in predict_name:
         continue
     print(predict_name)
     R += 1
@@ -124,7 +124,7 @@ for fl in file_list:
     worksheetPRE.write(R, 0, patient_id)
     worksheet95HD.write(R, 0, patient_id)
     worksheetHD.write(R, 0, patient_id)
-    predict_result_path = os.path.join(predict_path, patient_id + '_result.nii.gz')
+    predict_result_path = os.path.join(predict_path, patient_id + '_0_label.nii.gz')#'_result.nii.gz')
     mask_fullpath = os.path.join(mask_path, patient_id + '_0_label.nii.gz')
     labels = read_nii_image(mask_fullpath)
     labels = np.transpose(labels, [2, 1, 0])

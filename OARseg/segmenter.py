@@ -142,17 +142,15 @@ class Segmenter:
             for i, data in enumerate(self.testDataLoader):
                 inputs_list, patient_id = data
                 print("processing {}".format(patient_id[0]))
-
-                inputs = inputs_list[0]
-                local_result = inputs_list[1]
-
-                outputs = torch.zeros_like(local_result)
                 start_time = time.time()
+                inputs = inputs_list[0]
+                local_result, mask_template = inputs_list[1], inputs_list[2]
+
                 outputs_final_seg = torch.zeros_like(local_result)
                 for mrf_i in range(0, 2):
 
-                    net_inputs_list, _, net_mrf_list, crop_size_list, channels_list = \
-                        self.getInputImage(inputs, None, local_result, outputs_final_seg, mrf_i)
+                    net_inputs_list, _, net_mrf_list, net_template_list, crop_size_list, channels_list = \
+                        self.getInputImage(inputs, None, local_result, mask_template, outputs_final_seg, mrf_i)
 
                     organ_num_count = 0
                     for nil in range(len(net_inputs_list)):
@@ -166,12 +164,26 @@ class Segmenter:
                         if inputs_i == None:
                             continue
                         mrf_map_i = net_mrf_list[nil]
+                        template_i = net_template_list[nil]
                         output_channels = channels_list[nil]
                         mask_bbox = crop_size_list[nil]
-                        inputs_i, mrf_map_i = \
-                            inputs_i.to(self.device), mrf_map_i.to(self.device)
 
-                        outputs_seg = expConfig.net(inputs_i, mrf_map_i)
+                        inputs_i, mrf_map_i, template_i = \
+                            inputs_i.to(self.device), mrf_map_i.to(self.device), \
+                            template_i.to(self.device)
+
+                        mrf_inputs_i = torch.zeros([mrf_map_i.shape[0], 6, mrf_map_i.shape[2],
+                                                    mrf_map_i.shape[3], mrf_map_i.shape[4]]).to(self.device)
+                        template_inputs_i = torch.zeros([template_i.shape[0], 6, template_i.shape[2],
+                                                         template_i.shape[3], template_i.shape[4]]).to(self.device)
+
+                        for oic in range(len(output_channels)):
+                            out_channel_i = output_channels[oic]
+                            # print(out_channel_i, "->", nil)
+                            mrf_inputs_i[:, out_channel_i, :, :, :] = mrf_map_i[:, nil, :, :, :]
+                            template_inputs_i[:, out_channel_i, :, :, :] = template_i[:, nil, :, :, :]
+
+                        outputs_seg = expConfig.net(inputs_i, mrf_inputs_i, template_inputs_i)
 
                         for oic in range(len(output_channels)):
                             out_channel_i = output_channels[oic]
@@ -217,10 +229,10 @@ class Segmenter:
         epoch = 1
         while epoch < 10 and epoch <= self.bestMovingAvgEpoch + self.EARLY_STOPPING_AFTER_EPOCHS:
 
-            expConfig.net = expConfig.NoNewReversible_multiview_with_3d_mrf(Final_output=6,
-                                                                            Input_Channels=1,
-                                                                            kernel_size=(3, 3, 3),
-                                                                            kernel_size_2=(3, 3, 1))
+            expConfig.net = expConfig.NoNewReversible_multiview_with_3d_mrf_nocrop(Final_output=6,
+                                                                                   Input_Channels=1,
+                                                                                   kernel_size=(3, 3, 3),
+                                                                                   kernel_size_2=(3, 3, 1))
             expConfig.net = expConfig.net.to(self.device)
             expConfig.INITIAL_LR = 1e-9 * 10 ** (epoch - 1)
             expConfig.optimizer = optim.AdamW(expConfig.net.parameters(), lr=expConfig.INITIAL_LR)
@@ -237,113 +249,56 @@ class Segmenter:
             for i, data in enumerate(self.trainDataLoader):
 
                 # load data
-                inputs, pid, labels = data
-                for ini in range(len(inputs)):
-                    inputs[ini] = inputs[ini].to(self.device)
-                for lai in range(len(labels)):
-                    labels[lai] = labels[lai].to(self.device)
+                inputs_list, pid, labels_list = data
 
-                ori_inputs, ori_labels = inputs[0], labels[0]
-                ori_local_result = inputs[1]
+                inputs, labels = inputs_list[0], labels_list[0]
+                local_result = inputs_list[1]
 
                 total_loss = 0
 
-                outputs_final_seg = torch.zeros_like(ori_local_result)
+                outputs_final_seg = torch.zeros_like(local_result)
                 for mrf_i in range(0, 2):
-                    organ_num_count = 0
                     loss_n = 0
-                    for oar_i in range(0, organs_num):
 
-                        inputs = copy.deepcopy(ori_inputs)
-                        labels = copy.deepcopy(ori_labels)
-                        local_result = copy.deepcopy(ori_local_result)
-                        if mrf_i == 0 or epoch < 10:
-                            outputs_deform_new = copy.deepcopy(labels)
-                            if mrf_i == 0:
-                                outputs_mrf = torch.zeros_like(labels)
-                                organs_size_flag = organs_size
-                            else:
-                                outputs_mrf = torch.from_numpy(outputs_final_seg.detach().cpu().numpy()).to(self.device)
-                                organs_size_flag = organs_size
-                        else:
-                            outputs_deform_new = torch.from_numpy(outputs_final_seg.detach().cpu().numpy()).to(
-                                self.device)
-                            outputs_mrf = torch.from_numpy(outputs_final_seg.detach().cpu().numpy()).to(self.device)
-                            if mrf_i == 0:
-                                organs_size_flag = organs_size
-                            else:
-                                organs_size_flag = organs_size
+                    net_inputs_list, net_labels_list, net_mrf_list, crop_size_list, channels_list = \
+                        self.getInputImage(inputs, labels, local_result, outputs_final_seg, mrf_i)
 
-                        labels_select = torch.zeros_like(labels)
-                        outputs = torch.zeros_like(labels)
-
-                        organ_name_LR = organs_combine_name[oar_i]
-                        organ_channels_list = organs_channels[organ_name_LR]
-                        # print(organ_name_LR)
-                        if '-L' in organ_name_LR:
-                            organ_name = organ_name_LR.split('-L')[0]
-                        elif '-R' in organ_name_LR:
-                            organ_name = organ_name_LR.split('-R')[0]
-                        else:
-                            organ_name = organ_name_LR
-
-                        class_id = organs_size_class[organ_name]
-                        labels_class = torch.tensor([class_id]).to(self.device)
-                        crop_size = organs_size_flag[organ_name]
-                        organ_id_combine = organs_combine[organ_name_LR]
-
-                        for oic in range(len(organ_id_combine)):
-                            organ_id = organ_id_combine[oic]
-                            if oic == 0:
-                                output_scores_map = outputs_deform_new[:, organ_id - 1:organ_id, :, :, :]
-                                outputs_mrf_map = outputs_mrf[:, organ_id - 1:organ_id, :, :, :]
-                                labels_flag = labels[:, organ_id - 1:organ_id, :, :, :]
-                            else:
-                                output_scores_map = output_scores_map + outputs_deform_new[:, organ_id - 1:organ_id, :,
-                                                                        :, :]
-                                outputs_mrf_map = outputs_mrf_map + outputs_mrf[:, organ_id - 1:organ_id, :, :, :]
-                                labels_flag = labels_flag + labels[:, organ_id - 1:organ_id, :, :, :]
-
-
-                        if torch.sum(labels_flag).item() == 0:
+                    organ_num_count = 0
+                    for nil in range(len(net_inputs_list)):
+                        inputs_i = net_inputs_list[nil]
+                        if inputs_i == None:
                             continue
+                        organ_num_count += 1
 
-                        outputs_seg, mask_bbox = expConfig.net(inputs,
-                                                               output_scores_map,
-                                                               outputs_mrf_map,
-                                                               crop_size)
+                    for nil in range(len(net_inputs_list)):
+                        inputs_i = net_inputs_list[nil]
+                        if inputs_i == None:
+                            continue
+                        mrf_map_i = net_mrf_list[nil]
+                        labels_i = net_labels_list[nil]
+                        output_channels = channels_list[nil]
+                        mask_bbox = crop_size_list[nil]
 
-                        for oic in range(len(organ_id_combine)):
-                            organ_id = organ_id_combine[oic]
-                            outchannel = organ_channels_list[oic]
-                            outputs_final_seg[:, organ_id - 1, :, :, :] = 0
-                            outputs_final_seg[:, organ_id - 1,
+                        inputs_i, mrf_map_i, labels_i = \
+                            inputs_i.to(self.device), mrf_map_i.to(self.device), labels_i.to(self.device)
+
+                        outputs_seg = expConfig.net(inputs_i, mrf_map_i)
+
+                        outputs_i = torch.zeros_like(labels_i)
+                        for oic in range(len(output_channels)):
+                            out_channel_i = output_channels[oic]
+                            # print(out_channel_i, "->", nil)
+                            outputs_final_seg[:, nil, :, :, :] = 0
+                            outputs_final_seg[:, nil,
                             mask_bbox[2]:mask_bbox[5],
                             mask_bbox[1]:mask_bbox[4],
-                            mask_bbox[0]:mask_bbox[3]] = outputs_seg[:, outchannel,
+                            mask_bbox[0]:mask_bbox[3]] = outputs_seg[:, out_channel_i,
                                                          :mask_bbox[5] - mask_bbox[2],
                                                          :mask_bbox[4] - mask_bbox[1],
                                                          :mask_bbox[3] - mask_bbox[0]]
-                            outputs[:, organ_id - 1,
-                            mask_bbox[2]:mask_bbox[5],
-                            mask_bbox[1]:mask_bbox[4],
-                            mask_bbox[0]:mask_bbox[3]] = outputs_seg[:, outchannel,
-                                                         :mask_bbox[5] - mask_bbox[2],
-                                                         :mask_bbox[4] - mask_bbox[1],
-                                                         :mask_bbox[3] - mask_bbox[0]]
+                            outputs_i[:, nil, :, :, :] = outputs_seg[:, out_channel_i, :, :, :]
 
-                            labels_select[:, organ_id - 1,
-                            mask_bbox[2]:mask_bbox[5],
-                            mask_bbox[1]:mask_bbox[4],
-                            mask_bbox[0]:mask_bbox[3]] = labels[:, organ_id - 1,
-                                                         mask_bbox[2]:mask_bbox[5],
-                                                         mask_bbox[1]:mask_bbox[4],
-                                                         mask_bbox[0]:mask_bbox[3]]
-
-                            # outputs_crop_val[:, organ_id - 1, mask_bbox[2]:mask_bbox[5], mask_bbox[1]:mask_bbox[4],
-                            #                  mask_bbox[0]:mask_bbox[3]] = 0
-
-                        loss_dice, loss2_list = expConfig.loss(outputs, labels_select)
+                        loss_dice = expConfig.loss(outputs_i, labels_i)
 
                         print(mrf_i, " Seg Loss:", loss_dice.item())
 
@@ -351,34 +306,42 @@ class Segmenter:
 
                         loss_n = loss_n + loss.item()
 
-                        loss = loss / organs_num
+                        loss = loss / organ_num_count
 
                         loss.backward()
 
+                        del inputs_i, labels_i, \
+                            mrf_map_i, outputs_seg, \
+                            outputs_i
 
-                        del inputs, labels, \
-                            outputs, outputs_seg, \
-                            labels_class, labels_select, outputs_deform_new, \
-                            outputs_mrf, outputs_mrf_map, output_scores_map, \
-                            mask_bbox
-
-                        organ_num_count += 1
-
+                    for param_group in expConfig.optimizer.param_groups:
+                        print("Current lr: {:.6f}".format(param_group['lr']))
                     # update params
+                    torch.nn.utils.clip_grad_value_(expConfig.net.parameters(), clip_value=0.1)
+
                     expConfig.optimizer.step()
                     expConfig.optimizer.zero_grad()
 
+                    # print("GPU memory:", torch.cuda.max_memory_allocated(device=None))
+
+                    ## take lr sheudler step
+                    if hasattr(expConfig, "lr_sheudler"):
+                        if isinstance(expConfig.lr_sheudler, optim.lr_scheduler.OneCycleLR) and mrf_i == 1:
+                            expConfig.lr_sheudler.step()
+
                     total_loss = total_loss + loss_n / organ_num_count
 
-                torch.cuda.empty_cache()
+                    torch.cuda.empty_cache()
 
-                del ori_inputs, ori_labels, outputs_final_seg, class_id, crop_size, data
+                del outputs_final_seg, data, \
+                    inputs_list, labels_list
 
-                loss = loss / (mrf_i + 1)
+                total_loss = total_loss / (mrf_i + 1)
 
                 running_loss += total_loss
                 epoch_running_loss += total_loss
-                del loss
+
+                del total_loss
                 if expConfig.LOG_EVERY_K_ITERATIONS > 0:
                     if i % expConfig.LOG_EVERY_K_ITERATIONS == (expConfig.LOG_EVERY_K_ITERATIONS - 1):
                         print('[%d, %5d] loss: %.3f' % (epoch, i + 1, running_loss / expConfig.LOG_EVERY_K_ITERATIONS))
@@ -452,7 +415,7 @@ class Segmenter:
                 #     labels_list[lai] = labels_list[lai].to(self.device)
 
                 inputs, labels = inputs_list[0], labels_list[0]
-                local_result = inputs_list[1]
+                local_result, mask_template = inputs_list[1], inputs_list[2]
 
                 total_loss = 0
 
@@ -460,8 +423,8 @@ class Segmenter:
                 for mrf_i in range(0, 2):
                     loss_n = 0
 
-                    net_inputs_list, net_labels_list, net_mrf_list, crop_size_list, channels_list = \
-                        self.getInputImage(inputs, labels, local_result, outputs_final_seg, mrf_i)
+                    net_inputs_list, net_labels_list, net_mrf_list, net_template_list, crop_size_list, channels_list = \
+                        self.getInputImage(inputs, labels, local_result, mask_template, outputs_final_seg, mrf_i)
 
                     organ_num_count = 0
                     for nil in range(len(net_inputs_list)):
@@ -476,15 +439,26 @@ class Segmenter:
                             continue
                         mrf_map_i = net_mrf_list[nil]
                         labels_i = net_labels_list[nil]
+                        template_i = net_template_list[nil]
                         output_channels = channels_list[nil]
                         mask_bbox = crop_size_list[nil]
 
-                        inputs_i, mrf_map_i, labels_i = \
-                            inputs_i.to(self.device), mrf_map_i.to(self.device), labels_i.to(self.device)
+                        inputs_i, mrf_map_i, template_i, labels_i = \
+                            inputs_i.to(self.device), mrf_map_i.to(self.device), \
+                            template_i.to(self.device), labels_i.to(self.device)
 
+                        mrf_inputs_i = torch.zeros([mrf_map_i.shape[0], 6, mrf_map_i.shape[2],
+                                                    mrf_map_i.shape[3], mrf_map_i.shape[4]]).to(self.device)
+                        template_inputs_i = torch.zeros([template_i.shape[0], 6, template_i.shape[2],
+                                                         template_i.shape[3], template_i.shape[4]]).to(self.device)
 
-                        outputs_seg = expConfig.net(inputs_i, mrf_map_i)
+                        for oic in range(len(output_channels)):
+                            out_channel_i = output_channels[oic]
+                            # print(out_channel_i, "->", nil)
+                            mrf_inputs_i[:, out_channel_i, :, :, :] = mrf_map_i[:, nil, :, :, :]
+                            template_inputs_i[:, out_channel_i, :, :, :] = template_i[:, nil, :, :, :]
 
+                        outputs_seg = expConfig.net(inputs_i, mrf_inputs_i, template_inputs_i)
 
                         outputs_i = torch.zeros_like(labels_i)
                         for oic in range(len(output_channels)):
@@ -512,15 +486,27 @@ class Segmenter:
 
                         loss.backward()
 
+                        # torch.nn.utils.clip_grad_norm(expConfig.net.parameters(), max_norm=20)
+
+                        # torch.nn.utils.clip_grad_value_(expConfig.net.parameters(), clip_value=0.1)
+                        #
+                        # expConfig.optimizer.step()
+                        # expConfig.optimizer.zero_grad()
+
                         del inputs_i, labels_i, \
                             mrf_map_i, outputs_seg, \
-                            outputs_i
+                            outputs_i, template_i, \
+                            template_inputs_i, mrf_inputs_i,
 
                     for param_group in expConfig.optimizer.param_groups:
                         print("Current lr: {:.6f}".format(param_group['lr']))
                     # update params
+                    torch.nn.utils.clip_grad_value_(expConfig.net.parameters(), clip_value=0.1)
+
                     expConfig.optimizer.step()
                     expConfig.optimizer.zero_grad()
+
+                    # print("GPU memory:", torch.cuda.max_memory_allocated(device=None))
 
                     ## take lr sheudler step
                     if hasattr(expConfig, "lr_sheudler"):
@@ -532,7 +518,8 @@ class Segmenter:
                     torch.cuda.empty_cache()
 
                 del outputs_final_seg, data, \
-                    inputs_list, labels_list
+                    inputs_list, labels_list, \
+                    net_template_list
 
                 total_loss = total_loss / (mrf_i + 1)
 
@@ -624,13 +611,13 @@ class Segmenter:
                 inputs_list, pid, labels_list = data
 
                 inputs, labels = inputs_list[0], labels_list[0]
-                local_result = inputs_list[1]
+                local_result, mask_template = inputs_list[1], inputs_list[2]
 
                 outputs_final_seg = torch.zeros_like(local_result)
                 for mrf_i in range(0, 2):
 
-                    net_inputs_list, net_labels_list, net_mrf_list, crop_size_list, channels_list = \
-                        self.getInputImage(inputs, labels, local_result, outputs_final_seg, mrf_i)
+                    net_inputs_list, net_labels_list, net_mrf_list, net_template_list, crop_size_list, channels_list = \
+                        self.getInputImage(inputs, labels, local_result, mask_template, outputs_final_seg, mrf_i)
 
                     organ_num_count = 0
                     for nil in range(len(net_inputs_list)):
@@ -645,13 +632,26 @@ class Segmenter:
                             continue
                         mrf_map_i = net_mrf_list[nil]
                         labels_i = net_labels_list[nil]
+                        template_i = net_template_list[nil]
                         output_channels = channels_list[nil]
                         mask_bbox = crop_size_list[nil]
-                        inputs_i, mrf_map_i, labels_i = \
-                            inputs_i.to(self.device), mrf_map_i.to(self.device), labels_i.to(self.device)
 
+                        inputs_i, mrf_map_i, template_i, labels_i = \
+                            inputs_i.to(self.device), mrf_map_i.to(self.device), \
+                            template_i.to(self.device), labels_i.to(self.device)
 
-                        outputs_seg = expConfig.net(inputs_i, mrf_map_i)
+                        mrf_inputs_i = torch.zeros([mrf_map_i.shape[0], 6, mrf_map_i.shape[2],
+                                                    mrf_map_i.shape[3], mrf_map_i.shape[4]]).to(self.device)
+                        template_inputs_i = torch.zeros([template_i.shape[0], 6, template_i.shape[2],
+                                                         template_i.shape[3], template_i.shape[4]]).to(self.device)
+
+                        for oic in range(len(output_channels)):
+                            out_channel_i = output_channels[oic]
+                            # print(out_channel_i, "->", nil)
+                            mrf_inputs_i[:, out_channel_i, :, :, :] = mrf_map_i[:, nil, :, :, :]
+                            template_inputs_i[:, out_channel_i, :, :, :] = template_i[:, nil, :, :, :]
+
+                        outputs_seg = expConfig.net(inputs_i, mrf_inputs_i, template_inputs_i)
 
 
                         for oic in range(len(output_channels)):
@@ -814,12 +814,13 @@ class Segmenter:
             self.bestMovingAvg = self.movingAvg
             self.bestMovingAvgEpoch = epoch
 
-    def getInputImage(self, inputs, labels, local_result, outputs_final_seg, mrf_i=0):
+    def getInputImage(self, inputs, labels, local_result, template, outputs_final_seg, mrf_i=0):
         ## Get input image from original image
 
         net_inputs_list = []
         net_labels_list = []
         net_mrf_list = []
+        net_template_list = []
         crop_size_list = []
         output_channels_list = []
 
@@ -827,8 +828,11 @@ class Segmenter:
             outputs_deform_new = copy.deepcopy(local_result)
             outputs_mrf = torch.zeros_like(local_result)
         else:
-            if self.epoch_now < 200:
-                outputs_deform_new = copy.deepcopy(local_result)
+            if self.mode == "train":
+                if self.epoch_now < 200:
+                    outputs_deform_new = copy.deepcopy(local_result)
+                else:
+                    outputs_deform_new = torch.from_numpy(outputs_final_seg.detach().cpu().numpy())
             else:
                 outputs_deform_new = torch.from_numpy(outputs_final_seg.detach().cpu().numpy())
             outputs_mrf = torch.from_numpy(outputs_final_seg.detach().cpu().numpy())
@@ -861,6 +865,7 @@ class Segmenter:
                 net_inputs_list.append(None)
                 net_labels_list.append(None)
                 net_mrf_list.append(None)
+                net_template_list.append(None)
                 output_channels_list.append(None)
                 crop_size_list.append(None)
                 continue
@@ -915,27 +920,38 @@ class Segmenter:
                 inputs[:, :, mask_bbox[2]:mask_bbox[5], mask_bbox[1]:mask_bbox[4], mask_bbox[0]:mask_bbox[3]]
 
             if labels is not None:
+                label_crop = torch.zeros([1, int(labels.shape[1]), crop_size[3] + crop_size[0] + 8,
+                                          crop_size[1] + crop_size[4] + 8, crop_size[2] + crop_size[5] + 4])
                 for oic in range(len(organ_id_combine)):
                     organ_id = organ_id_combine[oic]
-                    label_crop = torch.zeros([1, int(labels.shape[1]), crop_size[3] + crop_size[0] + 8,
-                                              crop_size[1] + crop_size[4] + 8, crop_size[2] + crop_size[5] + 4])
 
                     label_crop[:, organ_id - 1, :mask_bbox[5] - mask_bbox[2], :mask_bbox[4] - mask_bbox[1], :mask_bbox[3] - mask_bbox[0]] = \
                         labels[:, organ_id - 1, mask_bbox[2]:mask_bbox[5], mask_bbox[1]:mask_bbox[4], mask_bbox[0]:mask_bbox[3]]
 
+            mrf_crop = torch.zeros([1, int(outputs_mrf_map.shape[1]), crop_size[3] + crop_size[0] + 8,
+                                    crop_size[1] + crop_size[4] + 8, crop_size[2] + crop_size[5] + 4])
             for oic in range(len(organ_id_combine)):
                 organ_id = organ_id_combine[oic]
-                mrf_crop = torch.zeros([1, int(outputs_mrf_map.shape[1]), crop_size[3] + crop_size[0] + 8,
-                                        crop_size[1] + crop_size[4] + 8, crop_size[2] + crop_size[5] + 4])
 
                 mrf_crop[:, organ_id - 1, :mask_bbox[5] - mask_bbox[2], :mask_bbox[4] - mask_bbox[1], :mask_bbox[3] - mask_bbox[0]] = \
                     outputs_mrf_map[:, organ_id - 1, mask_bbox[2]:mask_bbox[5], mask_bbox[1]:mask_bbox[4], mask_bbox[0]:mask_bbox[3]]
+
+            template_crop = torch.zeros([1, int(template.shape[1]), crop_size[3] + crop_size[0] + 8,
+                                    crop_size[1] + crop_size[4] + 8, crop_size[2] + crop_size[5] + 4])
+            for oic in range(len(organ_id_combine)):
+                organ_id = organ_id_combine[oic]
+
+                template_crop[:, organ_id - 1, :mask_bbox[5] - mask_bbox[2], :mask_bbox[4] - mask_bbox[1],
+                :mask_bbox[3] - mask_bbox[0]] = \
+                    template[:, organ_id - 1, mask_bbox[2]:mask_bbox[5], mask_bbox[1]:mask_bbox[4],
+                    mask_bbox[0]:mask_bbox[3]]
 
             net_inputs_list.append(input_crop)
             if labels is not None:
                 net_labels_list.append(label_crop)
             net_mrf_list.append(mrf_crop)
-        return net_inputs_list, net_labels_list, net_mrf_list, crop_size_list, output_channels_list
+            net_template_list.append(template_crop)
+        return net_inputs_list, net_labels_list, net_mrf_list, net_template_list, crop_size_list, output_channels_list
 
     def _getOrganName(self, oar_i):
         ## get OAR name
@@ -1013,24 +1029,37 @@ class Segmenter:
 
         matrix_x, matrix_y, matrix_z = torch.where(matrix[0,0,:,:,:] == 1)
         if len(matrix_x):
-            random_pad = random.randint(11, 14)
+            random_pad = random.randint(10, 13)
             random_pad = random_pad * 0.1
+            # random_pad = 1.4
             crop_size[5] = int((torch.max(matrix_z).item() - centroid_z) * random_pad)
-            random_pad = random.randint(11, 14)
+            if crop_size[5] <= 2:
+                crop_size[5] += 2
+            random_pad = random.randint(10, 13)
             random_pad = random_pad * 0.1
             crop_size[2] = int((centroid_z - torch.min(matrix_z).item()) * random_pad)
-            random_pad = random.randint(11, 14)
+            if crop_size[2] <= 2:
+                crop_size[2] += 2
+            random_pad = random.randint(10, 13)
             random_pad = random_pad * 0.1
             crop_size[4] = int((torch.max(matrix_y).item() - centroid_y) * random_pad)
-            random_pad = random.randint(11, 14)
+            if crop_size[4] <= 8:
+                crop_size[4] += 4
+            random_pad = random.randint(10, 13)
             random_pad = random_pad * 0.1
             crop_size[1] = int((centroid_y - torch.min(matrix_y).item()) * random_pad)
-            random_pad = random.randint(11, 14)
+            if crop_size[1] <= 8:
+                crop_size[1] += 4
+            random_pad = random.randint(10, 13)
             random_pad = random_pad * 0.1
             crop_size[3] = int((torch.max(matrix_x).item() - centroid_x) * random_pad)
-            random_pad = random.randint(11, 14)
+            if crop_size[3] <= 8:
+                crop_size[3] += 4
+            random_pad = random.randint(10, 13)
             random_pad = random_pad * 0.1
             crop_size[0] = int((centroid_x - torch.min(matrix_x).item()) * random_pad)
+            if crop_size[0] <= 8:
+                crop_size[0] += 4
 
         for cs in range(len(crop_size)):
             cs_i = crop_size[cs]

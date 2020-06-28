@@ -40,8 +40,6 @@ def LocationCentroid(matrix):
 
     matrix_sum = torch.sum(matrix)
 
-
-
     matrix_index = torch.ones([matrix.shape[1], matrix.shape[2], matrix.shape[3], 3])
     matrix_index = matrix_index.to(device)
 
@@ -409,8 +407,13 @@ def AllLoss(outputs, labels):
     ## Segmentation loss
     loss1 = SegLoss(outputs, labels)
 
+    ## Shape loss
+    # loss2 = ShapeLoss(outputs, labels)
+
+    # print("Seg:", loss1.item(), " Shape:", loss2.item())
+
     ## sum loss
-    final_loss = loss1
+    final_loss = loss1# + loss2 * ((1 - loss1) * (1 - loss1))
 
     return final_loss
 
@@ -422,7 +425,7 @@ def AllLossReg(outputs, labels):
     '''
 
     ## Segmentation loss
-    loss1 = SegLoss(outputs[1], labels[1])
+    loss1 = SegLoss(outputs[0], labels[1])
     loss2 = SegLoss(outputs[3], labels[1])
 
     ## Mse loss
@@ -430,7 +433,8 @@ def AllLossReg(outputs, labels):
     loss4 = MSELoss(outputs[2], labels[0])
 
     ## Distance loss
-    loss5 = NPCDistLoss(outputs[1], labels[1])
+    loss5 = NPCDistLoss(outputs[0], labels[1])
+    # loss6 = NPCDistLoss(outputs[3], labels[1])
 
     ## sum loss
     # final_seg_loss = loss1
@@ -478,6 +482,125 @@ def SegLoss(outputs, labels):
 
     return np.sum(wtLoss) / (wtMask_num + 1e-7)
 
+def ShapeLoss(outputs, labels):
+    ## Loss for Segmentation task
+    target_class = labels.shape[1]
+
+    # bring outputs into correct shape
+    wt = outputs.chunk(target_class, dim=1)
+    wt = list(wt)
+    wt_num = len(wt)
+    s = wt[0].shape
+    for wn in range(wt_num):
+        wt[wn] = wt[wn].view(s[0], s[2], s[3], s[4])
+
+    # bring masks into correct shape
+    wtMask = labels.chunk(target_class, dim=1)
+    wtMask = list(wtMask)
+    s = wtMask[0].shape
+    wtMask_label = []
+    for wn in range(wt_num):
+        wtMask[wn] = wtMask[wn].view(s[0], s[2], s[3], s[4])
+        if torch.sum(wtMask[wn]).item() != 0:
+            wtMask_label.append(wn)
+
+    wtMask_num = len(wtMask_label)
+
+    # calculate losses
+    wtLoss = []
+    for wn in wtMask_label:
+        wtLoss_1 = HuMomentLoss(wt[wn], wtMask[wn])
+        wtLoss.append(wtLoss_1)
+
+    return np.sum(wtLoss) / (wtMask_num + 1e-7)
+
+def HuMomentLoss(outputs, labels):
+    ## Loss for Segmentation task
+
+    outputs = torch.sum(outputs, dim=-1) / labels.shape[3]
+    labels = torch.sum(labels, dim=-1) / labels.shape[3]
+
+    Hu_outputs = HuMoment(outputs[0, :, :])
+    Hu_labels = HuMoment(labels[0, :, :])
+
+    HuLoss = []
+    for i in range(len(Hu_labels)):
+        HuLoss.append(torch.abs(Hu_outputs[i] - Hu_labels[i]))
+    HuLoss = np.sum(HuLoss) / 7
+
+    # HuLoss = torch.zeros([1]).cuda()
+    # z_count = 0
+    # for z in range(labels.shape[3]):
+    #     if torch.sum(labels[0, :, :, z]) == 0:
+    #         continue
+    #     Hu_outputs = HuMoment(outputs[0, :, :, z])
+    #     Hu_labels = HuMoment(labels[0, :, :, z])
+    #     HuLoss_z = []
+    #     for i in range(len(Hu_labels)):
+    #         HuLoss_z.append(torch.abs(Hu_outputs[i] - Hu_labels[i]))
+    #     HuLoss_z = np.sum(HuLoss_z) / 7
+    #     HuLoss += HuLoss_z
+    #     z_count += 1
+    # HuLoss = HuLoss / z_count
+    return HuLoss
+
+
+
+
+def HuMoment(map):
+    if map.is_cuda:
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    matrix_index = torch.ones([map.shape[0], map.shape[1], 2])
+    matrix_index = matrix_index.to(device)
+
+    matrix_index[:, :, 0] = torch.mul(matrix_index[:, :, 0],
+                                      torch.reshape(torch.range(0, map.shape[0] - 1), [map.shape[0], 1]).to(device))
+    matrix_index[:, :, 1] = torch.mul(matrix_index[:, :, 1],
+                                      torch.reshape(torch.range(0, map.shape[1] - 1), [1, map.shape[1]]).to(device))
+
+
+
+    m00 = torch.sum(map)
+    m10 = torch.sum(map * matrix_index[:, :, 0])
+    m01 = torch.sum(map * matrix_index[:, :, 1])
+
+    x0 = m10 / (m00 + 1e-7)
+    y0 = m01 / (m00 + 1e-7)
+
+    u00 = m00
+    n20 = torch.sum(map * ((matrix_index[:, :, 0] - x0) ** 2)) / (u00 + 1e-7)
+    n02 = torch.sum(map * ((matrix_index[:, :, 1] - y0) ** 2)) / (u00 + 1e-7)
+    n11 = torch.sum(map * (matrix_index[:, :, 1] - y0) * (matrix_index[:, :, 0] - x0)) / (u00 + 1e-7)
+    n12 = torch.sum(map * (matrix_index[:, :, 0] - x0) * ((matrix_index[:, :, 1] - y0) ** 2)) / ((u00 ** 1.5) + 1e-7)
+    n21 = torch.sum(map * ((matrix_index[:, :, 0] - x0) ** 2) * (matrix_index[:, :, 1] - y0)) / ((u00 ** 1.5) + 1e-7)
+    n30 = torch.sum(map * ((matrix_index[:, :, 0] - x0) ** 3)) / ((u00 ** 1.5) + 1e-7)
+    n03 = torch.sum(map * ((matrix_index[:, :, 1] - y0) ** 3)) / ((u00 ** 1.5) + 1e-7)
+
+    h1 = n20 + n02
+    h2 = (n20 - n02) ** 2 + 4 * (n11 ** 2)
+    h3 = (n20 - 3*n12) ** 2 + 3 * ((n21 - n03) ** 2)
+    h4 = (n30 + n12) ** 2 + (n21 + n03) ** 2
+    h5 = (n30 + 3 * n12) * (n30 + n12) * ((n30 + n12)**2 - 3*((n21 + n03) ** 2)) + \
+         (3*n21 - n03) * (n21 + n03) * (3 * ((n30 + n21) ** 2) - (n21 + n03) ** 2)
+    h6 = (n20 - n02) * ((n30 + n21) ** 2 - (n21 + n03) ** 2) + 4 * n11 * (n30 + n12) * (n21 + n03)
+    h7 = (3 * n21 - n03) * (n30 + n12) * ((n30 + n12) ** 2 - 3 * (n21 + n03) ** 2) - \
+         (n30 - n12) * (n21 + n03) * (3 * (n30 + n21) ** 2 - (n21 + n03) ** 2)
+
+    h1 = torch.sign(h1) * torch.log10(torch.abs(h1)+1e-7)
+    h2 = torch.sign(h2) * torch.log10(torch.abs(h2)+1e-7)
+    h3 = torch.sign(h3) * torch.log10(torch.abs(h3)+1e-7)
+    h4 = torch.sign(h4) * torch.log10(torch.abs(h4)+1e-7)
+    h5 = torch.sign(h5) * torch.log10(torch.abs(h5)+1e-7)
+    h6 = torch.sign(h6) * torch.log10(torch.abs(h6)+1e-7)
+    h7 = torch.sign(h7) * torch.log10(torch.abs(h7)+1e-7)
+
+    HuM = [h1, h2, h3, h4, h5, h6, h7]
+
+    return HuM
+
+
 def NPCRegionDiceLoss(outputs, labels, nonSquared=False, target_class=22):
 
     target_class = labels.shape[1]
@@ -520,49 +643,6 @@ def NPCRegionDiceLoss(outputs, labels, nonSquared=False, target_class=22):
     return (np.sum(wtLoss)*0.5 + np.sum(wtLoss_region)*0.5) / (wtMask_num + 1e-7), wtLoss
 
     # return (np.sum(wtLoss) + np.sum(wtLoss_dis) * 0.1)/(wtMask_num+1e-7),wtLoss
-
-def NPC3D2DDiceLoss(outputs, labels, nonSquared=False, target_class = 22):
-
-    target_class = labels.shape[1]
-
-    #bring outputs into correct shape
-    wt = outputs.chunk(target_class, dim=1)
-    wt = list(wt)
-    # wt = wt[0]
-    wt_num = len(wt)
-    s = wt[0].shape
-    for wn in range(wt_num):
-        wt[wn] = wt[wn].view(s[0], s[2], s[3], s[4])
-
-    # bring masks into correct shape
-    wtMask = labels.chunk(target_class, dim=1)
-    wtMask = list(wtMask)
-    s = wtMask[0].shape
-    wtMask_label = []
-    for wn in range(wt_num):
-        wtMask[wn] = wtMask[wn].view(s[0], s[2], s[3], s[4])
-        # print(torch.sum(wtMask[wn]).item())
-        if torch.sum(wtMask[wn]).item() != 0:
-            wtMask_label.append(wn)
-
-    wtMask_num = len(wtMask_label)
-    # print(wtMask_num)
-
-    #calculate losses
-    wtLoss = []
-    wtLoss_2d = []
-    for wn in wtMask_label:#range(wt_num):
-        wtLoss_1 = diceLoss(wt[wn], wtMask[wn], nonSquared=nonSquared)# + crossentropy(wt[wn], wtMask[wn])
-        wtLoss_1_2d = dice2DLoss(wt[wn], wtMask[wn], nonSquared=nonSquared)
-        # wtLoss_dis_1 = LocationLoss(wt[wn], wtMask[wn])
-        wtLoss.append(wtLoss_1)
-        wtLoss_2d.append(wtLoss_1_2d)
-        # wtLoss_dis.append(wtLoss_dis_1)
-
-    print('Dice Loss:', (np.sum(wtLoss) / (wtMask_num + 1e-7)).item(),
-          ' Dis Loss:', (np.sum(wtLoss_2d) / (wtMask_num + 1e-7)).item())
-
-    return (np.sum(wtLoss)*0.5 + np.sum(wtLoss_2d)*0.5) / (wtMask_num + 1e-7), wtLoss
 
 def NPCDistLoss(outputs, labels):
 

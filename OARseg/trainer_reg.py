@@ -9,7 +9,7 @@ import time
 import experiments.Registration_Bin_OARs as expConfig
 import xlwt,xlrd
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 organs_combine = {'Brain Stem':[1],
                   'Optical Nerve Chiasm':[2,4],
@@ -37,7 +37,7 @@ def main():
     exp_time = time.strftime("%Y%m%d%H%M", time.localtime(time.time()))
 
     ## experiment operation
-    exp_opt = "registration_alltemplate_globalmaxpooling_morechannels_distloss"
+    exp_opt = "registration_OneCycle_alltemplate2_scores_map_deform_affine_ratioresize"
 
     ## experiment name
     expConfig.id = exp_time + '_' + task_name + '_' + exp_opt if exp_opt else exp_time + '_' + task_name
@@ -46,12 +46,12 @@ def main():
     expConfig.EXCEL_ID = 'training_info.xls'
 
     expConfig.PREDICT = False
-    expConfig.RESTORE_ID = "202006130942_MICCAI2015OAR_registration_alltemplate_globalmaxpooling_morechannels"
-    expConfig.MODEL_NAME = "best_model"
+    expConfig.RESTORE_ID = "202006220930_MICCAI2015OAR_registration_OneCycle_alltemplate2_moremorechannels_scores_map_affine_each_oar_dist"
+    expConfig.MODEL_NAME = "last_model"
 
     AUTO_FIND_LR = False
 
-    expConfig.INITIAL_LR = 5e-5
+    expConfig.INITIAL_LR = 1e-5
     MAX_LR = 1e-4
     expConfig.L2_REGULARIZER = 1e-5
 
@@ -76,10 +76,10 @@ def main():
                                              num_workers=expConfig.DATASET_WORKERS)
 
     expConfig.net = expConfig.NoNewReversible_deform_affine()
-    expConfig.optimizer = optim.AdamW(expConfig.net.parameters(), lr=expConfig.INITIAL_LR)
-    # expConfig.lr_sheudler = optim.lr_scheduler.OneCycleLR(expConfig.optimizer, max_lr=MAX_LR,
-    #                                                       steps_per_epoch=len(trainloader), epochs=expConfig.EPOCHS)
-    expConfig.lr_sheudler = optim.lr_scheduler.MultiStepLR(expConfig.optimizer, [200], 0.2)
+    expConfig.optimizer = optim.Adam(expConfig.net.parameters(), lr=expConfig.INITIAL_LR)
+    expConfig.lr_sheudler = optim.lr_scheduler.OneCycleLR(expConfig.optimizer, max_lr=MAX_LR,
+                                                          steps_per_epoch=len(trainloader), epochs=expConfig.EPOCHS)
+    # expConfig.lr_sheudler = optim.lr_scheduler.MultiStepLR(expConfig.optimizer, [200], 0.2)
 
     total_num = sum(p.numel() for p in expConfig.net.parameters())
     trainiable_num = sum(p.numel() for p in expConfig.net.parameters() if p.requires_grad)
@@ -122,9 +122,9 @@ def main():
         WORKSHEET.write(8, 1, str(MAX_LR))
         EXCEL_WORKBOOK.save(expConfig.EXCEL_SAVE_PATH)
 
-        ## find best learning rate
-        if AUTO_FIND_LR:
-            seg.find_lr()
+    ## find best learning rate
+    if AUTO_FIND_LR:
+        seg.find_lr()
 
         # expConfig.optimizer = optim.AdamW(expConfig.net.parameters(), lr=expConfig.INITIAL_LR)
         # expConfig.lr_sheudler = optim.lr_scheduler.OneCycleLR(expConfig.optimizer, max_lr=MAX_LR,
