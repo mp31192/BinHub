@@ -38,7 +38,7 @@ def main():
     exp_time = time.strftime("%Y%m%d%H%M", time.localtime(time.time()))
 
     ## experiment operation
-    exp_opt = "registration_64channels_pad_2_221_reg_1_template2_resample_RAdam_amp"
+    exp_opt = "registration_seg_64channels_RAdam_amp"
 
     ## experiment name
     expConfig.id = exp_time + '_' + task_name + '_' + exp_opt if exp_opt else exp_time + '_' + task_name
@@ -52,7 +52,7 @@ def main():
 
     AUTO_FIND_LR = False
 
-    expConfig.INITIAL_LR = 5e-5
+    expConfig.INITIAL_LR = 1e-4
     MAX_LR = 5e-4
     expConfig.L2_REGULARIZER = 1e-5
 
@@ -79,7 +79,7 @@ def main():
     expConfig.net = expConfig.NoNewReversible_affine_class_seg_highresolution()
     # expConfig.net = expConfig.NoNewReversible_affine_class()
     expConfig.net = expConfig.net.cuda()
-    PRETRAINED_MODEL = True
+    PRETRAINED_MODEL = False
     reg_model = "/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/2019_MICCAI_challenge_NPC/checkpoint/202007201646_MICCAI2015OAR_registration_fixed_64channels_reg_1_template2_resample/best_model.pt"
     # reg_model = "/media/root/01456da2-1f1d-4b67-810e-b9cd3341133d/2019_MICCAI_challenge_NPC/checkpoint/202007231924_MICCAI2015OAR_registration_fixed_64channels_2_221_reg_1_template2_resample/best_model.pt"
     if PRETRAINED_MODEL:

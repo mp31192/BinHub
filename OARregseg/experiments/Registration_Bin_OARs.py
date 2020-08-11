@@ -67,8 +67,8 @@ class ResidualInner(nn.Module):
     def __init__(self, channels, kernel_size=3, groups_num=1, dilate_num=1):
         super(ResidualInner, self).__init__()
         # self.gn = nn.GroupNorm(groups, channels)
-        # self.InN = nn.InstanceNorm3d(channels)
-        self.SwN = SwitchNorm3d(channels, using_bn=False)
+        self.InN = nn.InstanceNorm3d(channels)
+        # self.SwN = SwitchNorm3d(channels, using_bn=False)
         real_k = kernel_size + (dilate_num - 1) * (kernel_size - 1)
         pad_num = np.int((real_k - 1) / 2)
         self.conv = nn.Conv3d(channels, channels, kernel_size, padding=pad_num, dilation=dilate_num, bias=False,
@@ -76,7 +76,7 @@ class ResidualInner(nn.Module):
         ##init.kaiming_normal(self.conv.weight)
 
     def forward(self, x):
-        x = F.leaky_relu(self.SwN(self.conv(x)), negative_slope=0.2, inplace=INPLACE)
+        x = F.leaky_relu(self.InN(self.conv(x)), negative_slope=0.2, inplace=INPLACE)
         return x
 
 
@@ -84,8 +84,8 @@ class ResidualInnerMultiview(nn.Module):
     def __init__(self, channels, kernel_size=(3, 3, 3), groups_num=1, dilate_num=1):
         super(ResidualInnerMultiview, self).__init__()
         # self.gn = nn.GroupNorm(groups, channels)
-        # self.InN = nn.InstanceNorm3d(channels)
-        self.SwN = SwitchNorm3d(channels, using_bn=False)
+        self.InN = nn.InstanceNorm3d(channels)
+        # self.SwN = SwitchNorm3d(channels, using_bn=False)
         self.dilate_num = (dilate_num, dilate_num, dilate_num)
         real_k = ()
         pad_num = ()
@@ -101,7 +101,7 @@ class ResidualInnerMultiview(nn.Module):
 
     def forward(self, x):
         x = self.conv(x)
-        x = F.leaky_relu(self.SwN(x), negative_slope=0.2, inplace=INPLACE)
+        x = F.leaky_relu(self.InN(x), negative_slope=0.2, inplace=INPLACE)
         return x
 
 
@@ -132,11 +132,11 @@ class ConvChangeDimension(nn.Module):
         super(ConvChangeDimension, self).__init__()
         self.convDimension = nn.Conv3d(inChannels, outChannels, 1, groups=groups_num)
         # init.kaiming_normal(self.convDimension.weight)
-        # self.InN = nn.InstanceNorm3d(outChannels)
-        self.SwN = SwitchNorm3d(outChannels, using_bn=False)
+        self.InN = nn.InstanceNorm3d(outChannels)
+        # self.SwN = SwitchNorm3d(outChannels, using_bn=False)
 
     def forward(self, x):
-        x = F.leaky_relu(self.SwN(self.convDimension(x)), negative_slope=0.2, inplace=INPLACE)
+        x = F.leaky_relu(self.InN(self.convDimension(x)), negative_slope=0.2, inplace=INPLACE)
         return x
 
 
@@ -866,7 +866,7 @@ class NoNewReversible_affine_class(nn.Module):
         self.encodersSeg = nn.ModuleList(encoderModulesSeg)
 
         self.MiddleConvSeg = nn.Conv3d(CHANNELS[i + 1], CHANNELS[i + 1], 1, bias=True)
-        self.MiddleSwNSeg = SwitchNorm3d(CHANNELS[i + 1], using_bn=False)
+        self.MiddleSwNSeg = nn.InstanceNorm3d(CHANNELS[i + 1])#SwitchNorm3d(CHANNELS[i + 1], using_bn=False)
 
         self.globalmaxpooling = nn.AdaptiveMaxPool3d((1, 1, 1))
         self.FC_class = nn.Linear(CHANNELS[i + 1], 9)
@@ -942,7 +942,7 @@ class NoNewReversible_affine_class_seg(nn.Module):
 
         self.MiddleConvSeg = nn.Conv3d(CHANNELS[i + 1], CHANNELS[i + 1], 1, bias=True)
         # self.MiddleInNSeg = nn.InstanceNorm3d(CHANNELS_TEMP[i + 1])
-        self.MiddleSwNSeg = SwitchNorm3d(CHANNELS[i + 1], using_bn=False)
+        self.MiddleSwNSeg = nn.InstanceNorm3d(CHANNELS[i + 1])#SwitchNorm3d(CHANNELS[i + 1], using_bn=False)
 
         self.globalmaxpooling = nn.AdaptiveMaxPool3d((1, 1, 1))
         self.FC_class = nn.Linear(CHANNELS[i + 1], 9)
@@ -1068,7 +1068,7 @@ class NoNewReversible_affine_class_seg_highresolution(nn.Module):
         self.encodersSeg = nn.ModuleList(encoderModulesSeg)
 
         self.MiddleConvSeg = nn.Conv3d(CHANNELS[i + 1], CHANNELS[i + 1], 1, bias=True)
-        self.MiddleSwNSeg = SwitchNorm3d(CHANNELS[i + 1], using_bn=False)
+        self.MiddleSwNSeg = nn.InstanceNorm3d(CHANNELS[i + 1])#SwitchNorm3d(CHANNELS[i + 1], using_bn=False)
 
         self.globalmaxpooling = nn.AdaptiveMaxPool3d((1, 1, 1))
         self.FC_class = nn.Linear(CHANNELS[i + 1], 9)
@@ -1077,8 +1077,8 @@ class NoNewReversible_affine_class_seg_highresolution(nn.Module):
         self.FC2.weight.data.zero_()
         self.FC2.bias.data.copy_(torch.tensor([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0], dtype=torch.float))
 
-        for p in self.parameters():
-            p.requires_grad = False
+        # for p in self.parameters():
+        #     p.requires_grad = False
 
         self.deconv1 = nn.Conv3d(1, CHANNELS[0] * 1, 1, bias=True)
 
@@ -1092,7 +1092,7 @@ class NoNewReversible_affine_class_seg_highresolution(nn.Module):
         self.encodersSeg2 = nn.ModuleList(encoderModulesSeg2)
 
         self.MiddleConvSeg2 = nn.Conv3d(CHANNELS[i + 1] * 1, CHANNELS[i + 1] * 1, 1, bias=True)
-        self.MiddleSwNSeg2 = SwitchNorm3d(CHANNELS[i + 1] * 1, using_bn=False)
+        self.MiddleSwNSeg2 = nn.InstanceNorm3d(CHANNELS[i + 1])#SwitchNorm3d(CHANNELS[i + 1] * 1, using_bn=False)
 
         # create decoder levels
         decoderModulesSeg = []

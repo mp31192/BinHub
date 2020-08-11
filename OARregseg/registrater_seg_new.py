@@ -751,7 +751,8 @@ class Registrater:
         net_labels_list = []
         net_labels_box_list = []
 
-        resize_shape = (224, 160, 96)
+        # resize_shape = (224, 160, 96)
+        resize_shape = (256, 192, 96)
 
         image_shape = inputs.shape[2:]
 
